@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a lighting curve",
+        "description": "Pick the Adaptive Lighting switch whose lights this curve controls.",
+        "data": { "switch": "Adaptive Lighting switch" }
+      }
+    },
+    "error": {
+      "not_main_switch": "Pick the main Adaptive Lighting switch, not its sleep mode or adapt switches."
+    },
+    "abort": {
+      "already_configured": "This switch already has a lighting curve."
+    }
+  }
+}

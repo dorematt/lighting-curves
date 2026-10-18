@@ -19,3 +19,8 @@ Requires Adaptive Lighting. Add this repo as a custom repository, type
 
 `dev/compose.yaml` runs a test Home Assistant with demo lights and this
 integration mounted read-only. Restart the container after a code change.
+
+Tests (run from the repo root; uses the HA image so `homeassistant` imports work):
+
+    docker run --rm --entrypoint python3 -v "$PWD":/repo -w /repo \
+      ghcr.io/home-assistant/home-assistant:2026.10.2 tests/test_curve.py

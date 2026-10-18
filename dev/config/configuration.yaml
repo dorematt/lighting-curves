@@ -4,10 +4,10 @@ default_config:
 # Fake lights (Bed Light, Ceiling Lights, Kitchen Lights, ...) to point schedules at.
 demo:
 
-http:
-  use_x_forwarded_for: true
-  trusted_proxies:
-    - 172.16.0.0/12
+# Since 2026.10 the http settings live in .storage/http, not here. Behind Caddy
+# they need use_x_forwarded_for and trusted_proxies 172.16.0.0/12, set over the
+# websocket with http/config/configure, then confirmed with http/config/promote
+# within 5 minutes of the restart, or HA reverts them.
 
 logger:
   default: info
