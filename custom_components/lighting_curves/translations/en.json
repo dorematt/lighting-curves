@@ -3,15 +3,15 @@
     "step": {
       "user": {
         "title": "Add a lighting curve",
-        "description": "Pick the Adaptive Lighting switch whose lights this curve controls.",
-        "data": { "switch": "Adaptive Lighting switch" }
+        "description": "Name the schedule (for example the room). Pick an Adaptive Lighting switch to have the schedule drive its lights. Leave it empty for a schedule that only provides a sensor, for use in your own automations.",
+        "data": { "name": "Name", "switch": "Adaptive Lighting switch" }
       }
     },
     "error": {
       "not_main_switch": "Pick the main Adaptive Lighting switch, not its sleep mode or adapt switches."
     },
     "abort": {
-      "already_configured": "This switch already has a lighting curve."
+      "already_configured": "A schedule with this name or switch already exists."
     }
   }
 }

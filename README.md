@@ -19,6 +19,7 @@ Requires Adaptive Lighting. Add this repo as a custom repository, type
 
 `dev/compose.yaml` runs a test Home Assistant with demo lights and this
 integration mounted read-only. Restart the container after a code change.
+`dev/ws.py` sends one websocket message to it (copy it into `dev/config/` first).
 
 Tests (run from the repo root; uses the HA image so `homeassistant` imports work):
 

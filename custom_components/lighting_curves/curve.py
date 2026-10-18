@@ -33,19 +33,13 @@ def _one_colour(point):
     return point
 
 
-POINT = vol.All(
-    vol.Schema(
-        {
-            vol.Required("time"): _valid_time,
-            vol.Required("brightness"): vol.All(int, vol.Range(1, 100)),
-            vol.Optional("color_temp_kelvin"): vol.All(int, vol.Range(1000, 10000)),
-            vol.Optional("rgb_color"): vol.All(
-                [vol.All(int, vol.Range(0, 255))], vol.Length(min=3, max=3)
-            ),
-        }
-    ),
-    _one_colour,
-)
+_SETTING = {
+    vol.Required("brightness"): vol.All(int, vol.Range(1, 100)),
+    vol.Optional("color_temp_kelvin"): vol.All(int, vol.Range(1000, 10000)),
+    vol.Optional("rgb_color"): vol.All([vol.All(int, vol.Range(0, 255))], vol.Length(min=3, max=3)),
+}
+SETTING = vol.All(vol.Schema(_SETTING), _one_colour)
+POINT = vol.All(vol.Schema({vol.Required("time"): _valid_time, **_SETTING}), _one_colour)
 POINTS = vol.All([POINT], vol.Length(min=1))
 
 
@@ -56,6 +50,29 @@ def minute_of_day(time: str, sunrise: float, sunset: float) -> float:
     return ((sunrise if m[3] == "sunrise" else sunset) + int(m[4])) % DAY
 
 
+# The order of points does not change with the seasons: it is their order on a day
+# with sunrise at 06:00 and sunset at 18:00.
+def ordered(points: list) -> list:
+    return sorted(points, key=lambda p: minute_of_day(p["time"], 360, 1080))
+
+
+def resolve(points: list, sunrise: float, sunset: float) -> list:
+    """Today's minute for each point of ordered(points).
+
+    A sun-relative point cannot move past the clock-time points on each side of it,
+    so a late summer sunset cannot carry an evening point past a fixed 20:30.
+    """
+    pts = ordered(points)
+    times = [minute_of_day(p["time"], sunrise, sunset) for p in pts]
+    clock = [t if _TIME.match(p["time"])[1] else None for p, t in zip(pts, times)]
+    for i, t in enumerate(times):
+        if clock[i] is None:
+            lo = max((c for c in clock[:i] if c is not None), default=0)
+            hi = min((c for c in clock[i + 1 :] if c is not None), default=DAY)
+            times[i] = min(max(t, lo), hi)
+    return times
+
+
 def _rgb(point) -> tuple:
     if "rgb_color" in point:
         return tuple(point["rgb_color"])
@@ -64,10 +81,7 @@ def _rgb(point) -> tuple:
 
 def target(points: list, now: float, sunrise: float, sunset: float) -> dict:
     """Brightness and colour at `now`, faded between the points either side of it."""
-    timed = sorted(
-        ((minute_of_day(p["time"], sunrise, sunset), p) for p in points),
-        key=lambda tp: tp[0],
-    )
+    timed = sorted(zip(resolve(points, sunrise, sunset), ordered(points)), key=lambda tp: tp[0])
     i = bisect_right([t for t, _ in timed], now)
     (t0, p0), (t1, p1) = timed[i - 1], timed[i % len(timed)]
     span = (t1 - t0) % DAY or DAY

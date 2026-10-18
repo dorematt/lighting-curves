@@ -1,7 +1,7 @@
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow
-from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
+from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig, TextSelector
 
 from . import DOMAIN
 
@@ -18,33 +18,35 @@ DEFAULT_POINTS = [
 
 
 class LightingCurvesConfigFlow(ConfigFlow, domain=DOMAIN):
-    """One entry per Adaptive Lighting switch."""
+    """One entry per schedule. With an Adaptive Lighting switch the schedule drives it;
+    without one it is a sensor for your own automations."""
 
     VERSION = 1
 
     async def async_step_user(self, user_input=None):
         errors = {}
         if user_input is not None:
-            switch = user_input["switch"]
-            await self.async_set_unique_id(switch)
+            name, switch = user_input["name"].strip(), user_input.get("switch")
+            await self.async_set_unique_id(switch or name.lower())
             self._abort_if_unique_id_configured()
-            state = self.hass.states.get(switch)
+            state = self.hass.states.get(switch) if switch else None
             # Only the main switch of an Adaptive Lighting entry carries manual_control.
-            if state is None or "manual_control" not in state.attributes:
+            if switch and (state is None or "manual_control" not in state.attributes):
                 errors["switch"] = "not_main_switch"
             else:
                 return self.async_create_entry(
-                    title=state.name.removeprefix("Adaptive Lighting: "),
-                    data={"switch": switch},
+                    title=name,
+                    data={"switch": switch} if switch else {},
                     options={"points": DEFAULT_POINTS},
                 )
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
                 {
-                    vol.Required("switch"): EntitySelector(
+                    vol.Required("name"): TextSelector(),
+                    vol.Optional("switch"): EntitySelector(
                         EntitySelectorConfig(integration="adaptive_lighting", domain="switch")
-                    )
+                    ),
                 }
             ),
             errors=errors,
