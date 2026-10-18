@@ -1,0 +1,32 @@
+# Test Home Assistant for lighting_curves. Tailnet-only through Caddy.
+#   ln -s /srv/fridaystack/.env dev/.env   (provides DOMAIN)
+#   docker compose -f dev/compose.yaml up -d
+# After a code change: docker restart lighting-curves-ha
+name: lighting-curves-dev
+
+services:
+  ha:
+    image: ghcr.io/home-assistant/home-assistant:2026.10.2  # keep in step with the live HA
+    container_name: lighting-curves-ha
+    restart: unless-stopped
+    user: "1000:1000"  # keeps files in config/ editable without sudo
+    environment:
+      TZ: Australia/Adelaide
+    volumes:
+      - ./config:/config
+      - ../custom_components/lighting_curves:/config/custom_components/lighting_curves:ro
+    networks:
+      - edge
+    labels:
+      caddy: ha-test.${DOMAIN}
+      caddy.reverse_proxy: "{{upstreams 8123}}"
+      homepage.group: Apps
+      homepage.name: HA Test (lighting-curves)
+      homepage.icon: mdi-home-assistant
+      homepage.href: https://ha-test.${DOMAIN}
+      homepage.description: Test Home Assistant for the lighting-curves integration
+
+networks:
+  edge:
+    external: true
+    name: fridaystack-edge

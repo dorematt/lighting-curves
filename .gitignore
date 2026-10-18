@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+# Test HA state: only the hand-written config is tracked.
+dev/config/*
+!dev/config/configuration.yaml
+dev/.env
+dev/credentials.env

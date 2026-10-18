@@ -1,0 +1,15 @@
+# Test Home Assistant for developing lighting_curves. Not the live house.
+default_config:
+
+# Fake lights (Bed Light, Ceiling Lights, Kitchen Lights, ...) to point schedules at.
+demo:
+
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 172.16.0.0/12
+
+logger:
+  default: info
+  logs:
+    custom_components.lighting_curves: debug
