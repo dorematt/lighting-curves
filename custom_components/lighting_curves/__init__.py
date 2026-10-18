@@ -8,7 +8,11 @@ from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET, STATE_ON, P
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_change
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_change,
+)
 from homeassistant.helpers.sun import get_astral_event_date
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
@@ -16,6 +20,7 @@ from homeassistant.util import dt as dt_util
 from .curve import target
 
 DOMAIN = "lighting_curves"
+PREVIEW_TIMEOUT = 600  # seconds without a preview change before the lights go back
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -44,6 +49,7 @@ class Curve:
         self._sent: dict | None = None
         self.preview_off: list[str] | None = None  # lights that were off when a preview began
         self._listeners: list = []
+        self._preview_timeout = None
 
     @property
     def points(self) -> list:
@@ -77,6 +83,45 @@ class Curve:
     def async_stop(self) -> None:
         while self._listeners:
             self._listeners.pop()()
+        if self._preview_timeout:
+            self._preview_timeout()
+
+    @callback
+    def async_restart_preview_timeout(self) -> None:
+        """A preview the card never ended (closed tab) ends by itself."""
+        if self._preview_timeout:
+            self._preview_timeout()
+        self._preview_timeout = async_call_later(self.hass, PREVIEW_TIMEOUT, self._async_preview_timed_out)
+
+    async def _async_preview_timed_out(self, _now) -> None:
+        self._preview_timeout = None
+        await self.async_end_preview()
+
+    async def async_end_preview(self) -> None:
+        """Put the lights back: off if they were off, else back on the schedule."""
+        if self._preview_timeout:
+            self._preview_timeout()
+            self._preview_timeout = None
+        off, self.preview_off = self.preview_off, None
+        if off is None:
+            return
+        call = self.hass.services.async_call
+        lights = self.lights()
+        if off:
+            await call("light", "turn_off", {"entity_id": off}, blocking=True)
+        await call(
+            "adaptive_lighting",
+            "set_manual_control",
+            {"entity_id": self.switch, "lights": lights, "manual_control": False},
+            blocking=True,
+        )
+        if on := [l for l in lights if l not in off]:
+            await call(
+                "adaptive_lighting",
+                "apply",
+                {"entity_id": self.switch, "lights": on, "turn_on_lights": False, "transition": 1},
+                blocking=True,
+            )
 
     async def _async_tick(self, _now) -> None:
         await self.async_update()

@@ -117,6 +117,7 @@ async def ws_preview(hass, connection, msg):
         {"entity_id": lights, "transition": 0.3, **setting},
         blocking=True,
     )
+    curve.async_restart_preview_timeout()
     connection.send_result(msg["id"])
 
 
@@ -124,26 +125,6 @@ async def ws_preview(hass, connection, msg):
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/preview_end", vol.Required("entry_id"): str})
 @websocket_api.async_response
 async def ws_preview_end(hass, connection, msg):
-    """Put the lights back: off if they were off, else back on the schedule."""
-    if not (curve := _curve(hass, connection, msg)):
-        return
-    off, curve.preview_off = curve.preview_off, None
-    if off is not None:
-        call = hass.services.async_call
-        lights = curve.lights()
-        if off:
-            await call("light", "turn_off", {"entity_id": off}, blocking=True)
-        await call(
-            "adaptive_lighting",
-            "set_manual_control",
-            {"entity_id": curve.switch, "lights": lights, "manual_control": False},
-            blocking=True,
-        )
-        if on := [l for l in lights if l not in off]:
-            await call(
-                "adaptive_lighting",
-                "apply",
-                {"entity_id": curve.switch, "lights": on, "turn_on_lights": False, "transition": 1},
-                blocking=True,
-            )
-    connection.send_result(msg["id"])
+    if curve := _curve(hass, connection, msg):
+        await curve.async_end_preview()
+        connection.send_result(msg["id"])
