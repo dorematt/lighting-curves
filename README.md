@@ -50,10 +50,9 @@ of an Adaptive Lighting entry. A new schedule starts with a default day curve.
 
 ## Development
 
-`dev/compose.yaml` runs a test Home Assistant with demo lights and this integration
-mounted read-only. Restart the container after a code change; the card's URL carries
+To try it, mount `custom_components/lighting_curves` into a test Home Assistant's
+`config/custom_components/`. Restart HA after a code change; the card's URL carries
 the file's modification time, so a restart is also what refreshes the card.
-`dev/ws.py` sends one websocket message to it (copy it into `dev/config/` first).
 
 Tests (run from the repo root; uses the HA image so `homeassistant` imports work):
 
