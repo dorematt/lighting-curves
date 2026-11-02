@@ -133,14 +133,27 @@ class LightingCurvesCardEditor extends HTMLElement {
       this.appendChild(this._form);
     }
     this._form.hass = this._hass;
-    this._form.data = { tabs: "wrap", ...this._config };
+    // The schedule picker holds entry IDs; show a schedule set by name too.
+    const want = this._config?.schedule;
+    if (want && this._hass && !this._schedules) {
+      this._schedules = [];
+      this._hass.callWS({ type: `${WS}/schedules` }).then((l) => (this._schedules = l) && this._update(), () => {});
+    }
+    const named = (this._schedules || []).find((x) => x.title.toLowerCase() === String(want).toLowerCase());
+    this._form.data = { tabs: "wrap", ...this._config, ...(named && { schedule: named.entry_id }) };
   }
 }
 
 class LightingCurvesCard extends HTMLElement {
   setConfig(config) {
+    const moved = config?.schedule !== this._config?.schedule;
     this._config = config || {};
-    this._current = null;
+    if (moved) {
+      // Another schedule: drop an open edit so a save cannot land on it.
+      this._current = null;
+      this._endPreview();
+      this._edit = this._form = this._sample = null;
+    }
     if (this._schedules) {
       this._pick();
       this._render();
@@ -216,7 +229,7 @@ class LightingCurvesCard extends HTMLElement {
     const list = this._schedules || [];
     const picker =
       layout === "dropdown"
-        ? `<select class="pick" data-pick>${list
+        ? `<select class="pick" data-pick aria-label="Schedule">${list
             .map((x) => `<option value="${esc(x.entry_id)}" ${x.entry_id === this._current ? "selected" : ""}>${esc(x.title)}</option>`)
             .join("")}</select>`
         : list
