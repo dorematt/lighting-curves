@@ -150,8 +150,8 @@ class LightingCurvesCard extends HTMLElement {
     this._config = config || {};
     if (moved) {
       // Another schedule: drop an open edit so a save cannot land on it.
+      this._endPreview(); // before _current changes: it names the schedule
       this._current = null;
-      this._endPreview();
       this._edit = this._form = this._sample = null;
     }
     if (this._schedules) {
