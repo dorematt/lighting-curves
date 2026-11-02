@@ -41,8 +41,8 @@ the time; without it, lights get the curve's setting when they turn on.
 - **HACS:** add this repo as a custom repository, type **Integration**.
 - **Manual:** copy `custom_components/lighting_curves` into `/config/custom_components/`.
 
-Restart Home Assistant, add the card to a dashboard, and select **New** on it to add
-a schedule. A new schedule starts with a default day curve and no lights. (Settings →
+Restart Home Assistant, add the card to a dashboard, and select **New schedule** on it
+to add a schedule. A new schedule starts with a default day curve and no lights. (Settings →
 Devices & services → Lighting Curves also adds one, linked to an Adaptive Lighting
 entry you already have.)
 
@@ -58,7 +58,12 @@ entry you already have.)
   lights. Adaptive Lighting leaves those lights alone until you select Save or
   Cancel, or for 10 minutes after the last change.
 
-  Card options: `schedule` (a schedule name, to show only that one) and `title`.
+  Card options (also in the card's visual editor):
+
+  - `title`: the card's title. `hide_title: true` removes it.
+  - `schedule`: a schedule (its name or entry ID), to show only that one.
+  - `tabs`: how to pick a schedule: `wrap` (tabs in rows, the default), `scroll`
+    (tabs in one row that scrolls sideways) or `dropdown` (a drop-down list).
 
 ## Development
 

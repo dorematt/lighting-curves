@@ -85,9 +85,79 @@ const LABELS = {
   name: "Name (for example the room)",
 };
 
+const TAB_LAYOUTS = [
+  { value: "wrap", label: "Wrapped rows" },
+  { value: "scroll", label: "One scrolling row" },
+  { value: "dropdown", label: "Dropdown" },
+];
+const CONFIG_LABELS = {
+  title: "Title",
+  hide_title: "Hide the title",
+  schedule: "Schedule",
+  tabs: "Schedule tabs",
+};
+const CONFIG_HELP = {
+  title: "Default: Lighting Curves, or the schedule's name when one schedule is shown",
+  schedule: "Show only this schedule. Empty shows them all",
+};
+
+const CONFIG_SCHEMA = [
+  { name: "title", selector: { text: {} } },
+  { name: "hide_title", selector: { boolean: {} } },
+  { name: "schedule", selector: { config_entry: { integration: WS } } },
+  { name: "tabs", required: true, selector: { select: { mode: "dropdown", options: TAB_LAYOUTS } } },
+];
+
+// The visual editor in the dashboard's card dialog. An element rather than
+// getConfigForm, because ha-form shows no default for an unset option.
+class LightingCurvesCardEditor extends HTMLElement {
+  setConfig(config) {
+    this._config = config;
+    this._update();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._update();
+  }
+
+  _update() {
+    if (!this._form) {
+      this._form = document.createElement("ha-form");
+      this._form.schema = CONFIG_SCHEMA;
+      this._form.computeLabel = (s) => CONFIG_LABELS[s.name];
+      this._form.computeHelper = (s) => CONFIG_HELP[s.name];
+      this._form.addEventListener("value-changed", (ev) =>
+        this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: ev.detail.value }, bubbles: true, composed: true }))
+      );
+      this.appendChild(this._form);
+    }
+    this._form.hass = this._hass;
+    // The schedule picker holds entry IDs; show a schedule set by name too.
+    const want = this._config?.schedule;
+    if (want && this._hass && !this._schedules) {
+      this._schedules = [];
+      this._hass.callWS({ type: `${WS}/schedules` }).then((l) => (this._schedules = l) && this._update(), () => {});
+    }
+    const named = (this._schedules || []).find((x) => x.title.toLowerCase() === String(want).toLowerCase());
+    this._form.data = { tabs: "wrap", ...this._config, ...(named && { schedule: named.entry_id }) };
+  }
+}
+
 class LightingCurvesCard extends HTMLElement {
   setConfig(config) {
+    const moved = config?.schedule !== this._config?.schedule;
     this._config = config || {};
+    if (moved) {
+      // Another schedule: drop an open edit so a save cannot land on it.
+      this._endPreview(); // before _current changes: it names the schedule
+      this._current = null;
+      this._edit = this._form = this._sample = null;
+    }
+    if (this._schedules) {
+      this._pick();
+      this._render();
+    }
   }
 
   getCardSize() {
@@ -95,7 +165,11 @@ class LightingCurvesCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return {};
+    return { tabs: "wrap" };
+  }
+
+  static getConfigElement() {
+    return document.createElement("lighting-curves-card-editor");
   }
 
   set hass(hass) {
@@ -123,13 +197,22 @@ class LightingCurvesCard extends HTMLElement {
       this._error = e.message || String(e);
     }
     this._loading = false;
-    const want = this._config.schedule;
-    const list = this._schedules || [];
-    if (!list.some((s) => s.entry_id === this._current)) {
-      this._current = (list.find((s) => s.title === want || s.entry_id === want) || list[0] || {}).entry_id;
-    }
+    this._pick();
     this._sample = null;
     this._render();
+  }
+
+  // The schedule to show: the pinned one (by entry ID or name), else the one
+  // already selected, else the first.
+  _pick() {
+    const want = this._config.schedule;
+    const list = this._schedules || [];
+    if (want) {
+      const w = String(want).toLowerCase();
+      this._current = list.find((s) => s.entry_id === want || s.title.toLowerCase() === w)?.entry_id;
+    } else if (!list.some((s) => s.entry_id === this._current)) {
+      this._current = list[0]?.entry_id;
+    }
   }
 
   get _schedule() {
@@ -142,25 +225,40 @@ class LightingCurvesCard extends HTMLElement {
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     const s = this._schedule;
     const pinned = this._config.schedule;
+    const layout = this._config.tabs || "wrap";
+    const list = this._schedules || [];
+    const picker =
+      layout === "dropdown"
+        ? `<select class="pick" data-pick aria-label="Schedule">${list
+            .map((x) => `<option value="${esc(x.entry_id)}" ${x.entry_id === this._current ? "selected" : ""}>${esc(x.title)}</option>`)
+            .join("")}</select>`
+        : list
+            .map((x) => `<button class="tab ${x.entry_id === this._current ? "on" : ""}" data-tab="${esc(x.entry_id)}">${esc(x.title)}</button>`)
+            .join("");
     const tabs =
       !pinned && this._schedules
-        ? `<div class="tabs">${this._schedules
-            .map((x) => `<button class="tab ${x.entry_id === this._current ? "on" : ""}" data-tab="${x.entry_id}">${esc(x.title)}</button>`)
-            .join("")}<button class="tab" data-new><ha-icon icon="mdi:plus"></ha-icon>New</button></div>`
+        ? `<button class="add top" data-new><ha-icon icon="mdi:plus"></ha-icon>New schedule</button>
+          <div class="tabs ${esc(layout)}">${picker}</div>`
         : "";
     let body;
     if (this._error) body = `<div class="msg">${esc(this._error)}</div>`;
     else if (!this._schedules) body = `<div class="msg">Loading…</div>`;
     else if (this._edit) body = this._editorHtml();
-    else if (!s) body = `<div class="msg">No lighting curves yet. Select New to add one.</div>`;
+    else if (!s && pinned) body = `<div class="msg">No schedule called ${esc(pinned)}.</div>`;
+    else if (!s) body = `<div class="msg">No lighting curves yet. Select New schedule to add one.</div>`;
     else body = this._listHtml(s);
 
+    const title = this._config.title || (pinned && s ? s.title : "Lighting Curves");
+    // A re-render replaces the tabs, so keep a scrolled tab row where it was.
+    const scroll = this.shadowRoot.querySelector(".tabs")?.scrollLeft;
     this.shadowRoot.innerHTML = `<style>${STYLE}</style>
-      <ha-card header="${esc(this._config.title || (pinned && s ? s.title : "Lighting curves"))}">
+      <ha-card ${this._config.hide_title ? "" : `header="${esc(title)}"`}>
         ${this._edit ? "" : tabs}
         ${s && !this._error && this._edit?.kind !== "new" ? this._graphHtml(this._sample || s) : ""}
         ${body}
       </ha-card>`;
+    const row = this.shadowRoot.querySelector(".tabs");
+    if (row && scroll) row.scrollLeft = scroll;
     this._bind();
   }
 
@@ -382,6 +480,10 @@ class LightingCurvesCard extends HTMLElement {
 
   _bind() {
     const root = this.shadowRoot;
+    root.querySelector("[data-pick]")?.addEventListener("change", (ev) => {
+      this._current = ev.target.value;
+      this._render();
+    });
     root.querySelectorAll("[data-tab]").forEach((b) =>
       b.addEventListener("click", () => {
         this._current = b.dataset.tab;
@@ -391,6 +493,16 @@ class LightingCurvesCard extends HTMLElement {
     root.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => this._openEditor(Number(b.dataset.edit))));
     root.querySelector("[data-add]")?.addEventListener("click", () => this._openEditor(null));
     root.querySelector("[data-lights]")?.addEventListener("click", () => this._openOther("lights"));
+    root.querySelector(".tabs.scroll")?.addEventListener(
+      "wheel",
+      (ev) => {
+        const t = ev.currentTarget;
+        if (!ev.deltaY || t.scrollWidth <= t.clientWidth) return;
+        t.scrollLeft += ev.deltaY;
+        ev.preventDefault();
+      },
+      { passive: false }
+    );
     root.querySelector("[data-new]")?.addEventListener("click", () => this._openOther("new"));
     root.querySelector("[data-cancel]")?.addEventListener("click", () => this._close());
     root.querySelector("[data-save]")?.addEventListener("click", () =>
@@ -417,10 +529,14 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 
 const STYLE = `
   ha-card { overflow: hidden; }
+  ha-card:not([header]) { padding-top: 12px; }
   .tabs { display: flex; gap: 8px; padding: 0 16px 8px; flex-wrap: wrap; }
+  .tabs.scroll { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+  .tabs.scroll .tab { flex-shrink: 0; white-space: nowrap; }
+  .pick { flex: 1; min-width: 0; padding: 8px 12px; border: 1px solid var(--divider-color); border-radius: 8px;
+          background: var(--card-background-color); color: var(--primary-text-color); font: inherit; cursor: pointer; }
   .tab { border: 1px solid var(--divider-color); background: none; color: var(--primary-text-color);
          border-radius: 16px; padding: 4px 12px; font: inherit; cursor: pointer; }
-  .tab ha-icon { --mdc-icon-size: 16px; }
   .tab.on { background: var(--primary-color); color: var(--text-primary-color); border-color: var(--primary-color); }
   .graph { padding: 0 16px 8px; }
   svg { width: 100%; height: 110px; display: block; }
@@ -443,6 +559,7 @@ const STYLE = `
   .chev { color: var(--secondary-text-color); }
   .add { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 16px; background: none; border: 0;
          border-top: 1px solid var(--divider-color); color: var(--primary-color); font: inherit; cursor: pointer; }
+  .add.top { border-top: 0; padding-top: 0; }
   .foot { padding: 8px 16px 12px; font-size: 12px; color: var(--secondary-text-color); }
   .msg { padding: 16px; color: var(--secondary-text-color); }
   .editor { padding: 0 16px 16px; }
@@ -466,6 +583,7 @@ const STYLE = `
 (function define(tries) {
   if (window.CustomElementRegistryPolyfill || tries > 200) {
     if (!customElements.get("lighting-curves-card")) customElements.define("lighting-curves-card", LightingCurvesCard);
+    if (!customElements.get("lighting-curves-card-editor")) customElements.define("lighting-curves-card-editor", LightingCurvesCardEditor);
   } else setTimeout(() => define(tries + 1), 50);
 })(0);
 window.customCards = window.customCards || [];
