@@ -20,20 +20,31 @@ lights: turn-on interception, manual-control detection and transitions. RGB targ
 go through Adaptive Lighting's sleep mode, which the integration turns on and off by
 itself in a schedule that has RGB points.
 
-A schedule without an Adaptive Lighting switch only provides a sensor, for your own
-automations.
+You manage the lights from the card. When a schedule first gets lights, the
+integration makes an Adaptive Lighting entry for it, with the settings of an existing
+entry (or Adaptive Lighting's defaults). A light follows one schedule: adding it to
+one takes it off any other Adaptive Lighting entry.
+
+Untick **Use Adaptive Lighting** in a schedule's lights to drive them without it: a
+light then gets the curve's setting each time it turns on (from a motion sensor, a
+switch, anything), and keeps it until it next turns on. Use this for lights that are
+on only briefly, or that Adaptive Lighting cannot drive.
+
+A schedule with no lights only provides a sensor, for your own automations.
 
 ## Install
 
-Requires Home Assistant 2026.10 or later. Adaptive Lighting is needed for schedules
-that drive lights.
+Requires Home Assistant 2026.10 or later. [Adaptive Lighting](https://my.home-assistant.io/redirect/hacs_repository/?owner=basnijholt&repository=adaptive-lighting&category=integration)
+(HACS, or Marketplace from 2026.11) is needed for lights that follow the curve all
+the time; without it, lights get the curve's setting when they turn on.
 
 - **HACS:** add this repo as a custom repository, type **Integration**.
 - **Manual:** copy `custom_components/lighting_curves` into `/config/custom_components/`.
 
-Restart Home Assistant, then add **Lighting Curves** in Settings → Devices &
-services. Add it once per schedule: give it a name and, optionally, the main switch
-of an Adaptive Lighting entry. A new schedule starts with a default day curve.
+Restart Home Assistant, add the card to a dashboard, and select **New** on it to add
+a schedule. A new schedule starts with a default day curve and no lights. (Settings →
+Devices & services → Lighting Curves also adds one, linked to an Adaptive Lighting
+entry you already have.)
 
 ## What you get
 
@@ -41,7 +52,8 @@ of an Adaptive Lighting entry. A new schedule starts with a default day curve.
   and the attribute `color_temp_kelvin` or `rgb_color` is the colour.
 - The **Lighting Curves card** (`type: custom:lighting-curves-card`). The integration
   loads it, so no dashboard resource is needed. It shows a tab per schedule, a day
-  graph, and the list of points. Select a point to edit it with Home Assistant's own
+  graph, the schedule's lights, and the list of points. Select **Lights** to choose
+  the lights. Select a point to edit it with Home Assistant's own
   pickers. **Preview on the lights** shows the setting live on all the schedule's
   lights. Adaptive Lighting leaves those lights alone until you select Save or
   Cancel, or for 10 minutes after the last change.
