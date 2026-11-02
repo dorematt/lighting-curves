@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET, STATE_ON, Platform
+from homeassistant.const import EVENT_STATE_CHANGED, SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET, STATE_ON, Platform
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -55,9 +55,15 @@ class Curve:
     def points(self) -> list:
         return self.entry.options["points"]
 
+    def plain_lights(self) -> list[str]:
+        """Lights without Adaptive Lighting: they get the target when they turn on."""
+        return [] if self.switch else list(self.entry.options.get("lights", []))
+
     def lights(self) -> list[str]:
-        """The lights of the Adaptive Lighting switch."""
-        if not self.switch or not (ent := er.async_get(self.hass).async_get(self.switch)):
+        """All the schedule's lights: the Adaptive Lighting switch's, or the plain ones."""
+        if not self.switch:
+            return self.plain_lights()
+        if not (ent := er.async_get(self.hass).async_get(self.switch)):
             return []
         al = self.hass.config_entries.async_get_entry(ent.config_entry_id)
         return list(al.options.get("lights", [])) if al else []
@@ -73,6 +79,13 @@ class Curve:
                 None,
             )
         self._listeners.append(async_track_time_change(self.hass, self._async_tick, second=0))
+        self._listeners.append(
+            self.hass.bus.async_listen(
+                EVENT_STATE_CHANGED,
+                self._async_light_changed,
+                event_filter=self._is_plain_light,
+            )
+        )
         if self.switch:
             self._listeners.append(
                 async_track_state_change_event(self.hass, [self.switch], self._async_switch_changed)
@@ -109,6 +122,9 @@ class Curve:
         lights = self.lights()
         if off:
             await call("light", "turn_off", {"entity_id": off}, blocking=True)
+        if not self.switch:
+            await self._async_apply([l for l in lights if l not in off])
+            return
         await call(
             "adaptive_lighting",
             "set_manual_control",
@@ -122,6 +138,25 @@ class Curve:
                 {"entity_id": self.switch, "lights": on, "turn_on_lights": False, "transition": 1},
                 blocking=True,
             )
+
+    @callback
+    def _is_plain_light(self, data) -> bool:
+        return data["entity_id"] in self.plain_lights()
+
+    async def _async_light_changed(self, event: Event) -> None:
+        old, new = event.data["old_state"], event.data["new_state"]
+        # ponytail: a light already on at HA start (old is None) keeps its setting until it next turns on
+        if old and new and old.state != STATE_ON and new.state == STATE_ON and self.preview_off is None:
+            await self._async_apply([new.entity_id])
+
+    async def _async_apply(self, lights: list[str]) -> None:
+        """Set plain lights to the target now."""
+        if not lights or not (t := self.target):
+            return
+        data = {k: v for k, v in t.items() if k != "brightness"}
+        await self.hass.services.async_call(
+            "light", "turn_on", {"entity_id": lights, "brightness_pct": t["brightness"], **data}, blocking=True
+        )
 
     async def _async_tick(self, _now) -> None:
         await self.async_update()
