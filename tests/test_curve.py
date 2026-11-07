@@ -115,4 +115,16 @@ assert resolve(after, SUNRISE, 1080) == [120, 360, 1320]
 assert resolve(after, SUNRISE, 1260) == [300, 360, 1320]  # sunset 21:00: 05:00
 assert resolve(after, SUNRISE, 1380) == [360, 360, 1320]  # would be 07:00: clamped at 06:00
 
+# A sun point clamped onto a clock point across midnight keeps its place before it:
+# the fade reaches the sun point at 00:30, then the 00:30 point takes over.
+for pts_, rise, sett in (
+    ([("00:30", 60), ("21:00", 20), ("sunset+240", 5)], SUNRISE, 1260),
+    ([("00:30", 60), ("23:00", 20), ("sunrise-400", 5)], 480, SUNSET),
+):
+    edge = POINTS([{"time": t, "brightness": b, "color_temp_kelvin": 2700} for t, b in pts_])
+    assert sorted(resolve(edge, rise, sett)).count(30) == 2
+    assert target(edge, 29.9, rise, sett)["brightness"] == 5  # fading into the sun point
+    assert target(edge, 30, rise, sett)["brightness"] == 60  # the clock point from 00:30
+    assert target(edge, 31, rise, sett)["brightness"] == 60
+
 print("ok")

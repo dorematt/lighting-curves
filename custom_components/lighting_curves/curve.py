@@ -10,7 +10,6 @@ of the next day. All times are minutes since local midnight.
 """
 from __future__ import annotations
 
-from bisect import bisect_right
 import re
 
 import voluptuous as vol
@@ -109,11 +108,18 @@ def _rgb(point) -> tuple:
 
 def target(points: list, now: float, sunrise: float, sunset: float) -> dict:
     """Brightness and colour at `now`, faded between the points either side of it."""
-    timed = sorted(zip(resolve(points, sunrise, sunset), ordered(points)), key=lambda tp: tp[0])
-    i = bisect_right([t for t, _ in timed], now)
-    (t0, p0), (t1, p1) = timed[i - 1], timed[i % len(timed)]
-    span = (t1 - t0) % DAY or DAY
-    f = ((now - t0) % DAY) / span
+    # Keep ordered()'s circular order, do not sort by time: a clamped sun point can
+    # share its minute with a clock point, and the order says which comes first.
+    pts, times = ordered(points), resolve(points, sunrise, sunset)
+    n = len(pts)
+    p0 = p1 = pts[-1]
+    f = 0
+    for i in range(n):
+        t0, j = times[i], (i + 1) % n
+        span = (times[j] - t0) % DAY or (DAY if n == 1 else 0)
+        if (now - t0) % DAY < span:
+            p0, p1, f = pts[i], pts[j], ((now - t0) % DAY) / span
+            break
     if p0 is p1 or f == 0:
         f, p1 = 0, p0
 
