@@ -4,6 +4,7 @@ from homeassistant.config_entries import ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     EntitySelector,
     EntitySelectorConfig,
     NumberSelector,
@@ -82,4 +83,10 @@ class LightingCurvesOptionsFlow(OptionsFlow):
         ))] = SelectSelector(SelectSelectorConfig(
             options=["pause_all", "pause_changed"], translation_key="manual_control_mode",
         ))
+        schema[vol.Required("separate_turn_on", default=self.config_entry.options.get(
+            "separate_turn_on", DEFAULTS["separate_turn_on"]
+        ))] = BooleanSelector()
+        schema[vol.Required("turn_on_floor", default=self.config_entry.options.get(
+            "turn_on_floor", DEFAULTS["turn_on_floor"]
+        ))] = NumberSelector(NumberSelectorConfig(min=1, max=100, step=1, mode="box", unit_of_measurement="%"))
         return self.async_show_form(step_id="init", data_schema=vol.Schema(schema), errors=errors)

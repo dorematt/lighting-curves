@@ -30,7 +30,13 @@
           "initial_transition": "Turn-on transition",
           "manual_control_mode": "Manual control",
           "manual_control_timeout": "Manual control timeout",
-          "lights": "Lights"
+          "lights": "Lights",
+          "separate_turn_on": "Separate turn-on",
+          "turn_on_floor": "Turn-on floor"
+        },
+        "data_description": {
+          "separate_turn_on": "For lights that stay dark when a turn-on also sets brightness or colour. Turn on plain, then apply the curve with the turn-on transition.",
+          "turn_on_floor": "With separate turn-on: before a light turns off, dim it to this level, so the next turn-on starts here. Skipped while Curve Active is off."
         }
       }
     },

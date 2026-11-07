@@ -113,6 +113,43 @@ async def test_caller_transition(hass, service_calls):
     assert len(service_calls) == 1 and service_calls[0][2]["transition"] == 600
 
 
+async def test_separate_turn_on(hass, calls, curve):
+    curve.entry.options["separate_turn_on"] = True
+    try:
+        hass.states.async_set("light.rgb", "off", RGB)
+        await hass.async_block_till_done()
+        calls.clear()
+        await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb", "brightness": 12, "transition": 3},
+                                       blocking=True)
+        await hass.async_block_till_done()
+        plain, applied = [data for entity, _, data in calls if entity == "light.rgb"]
+        assert plain == {"transition": 3}, "the turn-on must not carry brightness or colour"
+        assert applied["brightness"] == 153 and "rgb_color" in applied and applied["transition"] == 1
+        assert "light.rgb" not in curve.manual
+        for service in ("turn_off", "toggle"):  # dims to the floor (5% = 13) first
+            calls.clear()
+            await hass.services.async_call("light", service, {"entity_id": "light.rgb"}, blocking=True)
+            await hass.async_block_till_done()
+            assert calls == [("light.rgb", "turn_on", {"brightness": 13}), ("light.rgb", service, {})], calls
+            assert hass.states.get("light.rgb").state == "off" and "light.rgb" not in curve.manual
+            await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb"}, blocking=True)
+            await hass.async_block_till_done()
+        hass.states.async_set("light.rgb", "on", {**RGB, "brightness": 8})  # already below the floor
+        calls.clear()
+        await hass.services.async_call("light", "turn_off", {"entity_id": "light.rgb"}, blocking=True)
+        await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb"}, blocking=True)
+        await hass.async_block_till_done()
+        assert calls[0] == ("light.rgb", "turn_off", {}), calls
+        curve.hold("light.rgb")  # Curve Active off: leave the manual level alone
+        calls.clear()
+        await hass.services.async_call("light", "turn_off", {"entity_id": "light.rgb"}, blocking=True)
+        await hass.async_block_till_done()
+        assert calls == [("light.rgb", "turn_off", {})]
+    finally:
+        curve.entry.options["separate_turn_on"] = False
+        curve.resume("light.rgb")
+
+
 async def test_busy_tick_skipped(curve):
     with patch.object(curve, "async_update", new_callable=AsyncMock) as update:
         async with curve._apply_lock:
@@ -253,6 +290,7 @@ async def main():
     await test_area_targets_batched(hass, service_calls)
     await test_effect_flash_pass_through(hass, service_calls, curve)
     await test_caller_transition(hass, service_calls)
+    await test_separate_turn_on(hass, calls, curve)
     await test_busy_tick_skipped(curve)
     hass.states.async_set("light.rgb", "off", RGB)
     await hass.async_block_till_done()
@@ -402,7 +440,7 @@ async def main():
     flow = LightingCurvesOptionsFlow()
     flow.hass, flow.handler = hass, entry.entry_id
     form = await flow.async_step_init()
-    assert len(form["data_schema"].schema) == 6
+    assert len(form["data_schema"].schema) == 8
     lights_key = next(k for k in form["data_schema"].schema if k == "lights")
     assert lights_key.description["suggested_value"] == ["light.ct"]  # existing lights only
     result = await flow.async_step_init({**DEFAULTS, "lights": ["light.ct"], "transition": 20})
@@ -412,7 +450,7 @@ async def main():
     entry.options = {**entry.options, "lights": ["light.ct"]}
     await test_migration_duplicate_ownership()
     await test_setup_cleanup_and_overlap(hass)
-    print("ok: capabilities, contexts, batched targets, effect/flash, transitions, tolerances, busy ticks, migration ownership, setup cleanup, manual control, preview rollback/unload, fallback")
+    print("ok: capabilities, contexts, batched targets, effect/flash, transitions, separate turn-on, tolerances, busy ticks, migration ownership, setup cleanup, manual control, preview rollback/unload, fallback")
 
 
 test_context_ownership()

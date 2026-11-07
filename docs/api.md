@@ -55,7 +55,7 @@ Each schedule has this shape (graph arrays shortened):
   "times": [360], "sunrise": 360, "sunset": 1080, "now": 720,
   "lights": ["light.desk"], "curve_active": {"light.desk": true},
   "target": {"brightness":80,"color_temp_kelvin":4000},
-  "options": {"interval":90,"transition":45,"initial_transition":1,"manual_control_mode":"pause_all","manual_control_timeout":0},
+  "options": {"interval":90,"transition":45,"initial_transition":1,"manual_control_mode":"pause_all","manual_control_timeout":0,"separate_turn_on":false,"turn_on_floor":5},
   "preview": {"active":false,"expires_at":null},
   "samples": [{"brightness":80,"color_temp_kelvin":4000}], "sample_step": 10
 }
@@ -115,6 +115,8 @@ Set these through the integration's native options flow; actions/WS preserve the
 | `initial_transition` | 1 s | Fade on turn-on / restoration; minimum 0; caller's explicit transition wins on intercepted turn-on |
 | `manual_control_mode` | `pause_all` | Manual change pauses brightness and colour; `pause_changed` pauses only changed axes |
 | `manual_control_timeout` | 0 s | Resume after this delay; 0 disables the timer; off/on also resumes |
+| `separate_turn_on` | `false` | Turn-on stays plain (brightness/colour fields dropped); the curve applies after the light reports on, with `initial_transition` |
+| `turn_on_floor` | 5 % | With `separate_turn_on`: `turn_off` (and `toggle` of an on light) first sets this brightness, unless the light is manually paused or in preview |
 
 Each assigned light has a **Light name Curve Active** switch on its schedule device. It is off
 whenever any axis is manually paused, including in `pause_changed` mode. Use `switch.turn_on` to clear

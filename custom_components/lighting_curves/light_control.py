@@ -21,6 +21,8 @@ DEFAULTS = {
     "initial_transition": 1,
     "manual_control_mode": "pause_all",
     "manual_control_timeout": 0,
+    "separate_turn_on": False,
+    "turn_on_floor": 5,
 }
 BRIGHTNESS_KEYS = {"brightness", "brightness_pct", "brightness_step", "brightness_step_pct", "white"}
 COLOR_KEYS = {"color_temp_kelvin", "color_temp", "kelvin", "rgb_color", "rgbw_color", "rgbww_color",
@@ -98,9 +100,34 @@ def register_curve(curve):
     if len(shared["curves"]) > 1:
         return
 
+    def owner_of(entity_id):
+        return next((c for c in shared["curves"].values() if entity_id in c.lights()), None)
+
+    async def floor_before_off(call, data):
+        """Separate turn-on: dim curve-active lights to the floor so the next plain turn-on starts there."""
+        for entity_id in sorted(e for e in target_entities(hass, data) if e.startswith("light.")):
+            owner, state = owner_of(entity_id), hass.states.get(entity_id)
+            level = owner and round(owner.option("turn_on_floor") * 255 / 100)
+            if (not owner or not owner.option("separate_turn_on") or not state or state.state != "on"
+                    or entity_id in owner.manual or owner.in_preview(entity_id)
+                    or not set(state.attributes.get("supported_color_modes", [])) - {"onoff", "unknown"}
+                    or (state.attributes.get("brightness") or 256) <= level):  # never brighten on the way off
+                continue
+            try:
+                await hass.services.async_call("light", "turn_on", {
+                    "entity_id": entity_id, "brightness": level,
+                }, blocking=True, context=own_context(call.context))
+            except Exception:
+                # The turn-off still goes ahead; the next turn-on starts at the old level.
+                _LOGGER.exception("Could not dim %s to its floor before turn-off", entity_id)
+
     async def intercept(call, data):
         if is_ours(call.context):
             return
+        if call.service != "turn_on":
+            await floor_before_off(call, data)
+            if call.service == "turn_off":
+                return
         original = dict(data.get("params", {}))
         if "effect" in original or "flash" in original:
             return
@@ -110,10 +137,15 @@ def register_curve(curve):
         rewrites = {}
         for entity_id in entities:
             state = hass.states.get(entity_id)
-            owner = next((c for c in shared["curves"].values() if entity_id in c.lights()), None)
+            owner = owner_of(entity_id)
             if not owner or not state or state.state != "off" or owner.in_preview(entity_id):
                 continue
             owner.resume(entity_id)
+            if owner.option("separate_turn_on"):
+                # Plain turn-on (some devices ignore one that carries brightness or colour);
+                # the state listener applies the curve once the light reports on.
+                rewrites[entity_id] = {}
+                continue
             owner.calculate_target()
             rewrites[entity_id] = with_transition(
                 light_data(state, owner.target), original.get("transition", owner.option("initial_transition"))
@@ -151,7 +183,7 @@ def register_curve(curve):
                 _LOGGER.exception("Could not forward %s for %s", call.service, remaining)
 
     try:
-        for service in ("turn_on", "toggle"):
+        for service in ("turn_on", "toggle", "turn_off"):
             shared["hooks"].append(setup_service_call_interceptor(hass, "light", service, intercept))
     except (RuntimeError, AttributeError, TypeError):
         while shared["hooks"]:
