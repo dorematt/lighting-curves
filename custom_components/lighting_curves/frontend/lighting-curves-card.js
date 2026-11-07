@@ -177,7 +177,7 @@ class LightingCurvesCard extends HTMLElement {
   }
 
   connectedCallback() {
-    this._timer = setInterval(() => !this._edit && this._load(), 60000);
+    this._timer = setInterval(() => this._edit ? this._refreshPreview() : this._load(), 60000);
   }
 
   disconnectedCallback() {
@@ -327,6 +327,7 @@ class LightingCurvesCard extends HTMLElement {
     return `<div class="editor">
       <div class="etitle">${title}</div>
       <div id="form"></div>
+      ${e.kind === "point" ? `<div class="help" id="preview-status">${this._previewStatus()}</div>` : ""}
       ${help ? `<div class="help">${help}</div>` : ""}
       <div class="buttons">
         ${canDelete ? `<button class="btn del" data-delete>Delete</button>` : ""}
@@ -420,7 +421,8 @@ class LightingCurvesCard extends HTMLElement {
       this._previewing = true;
       const setting = { ...p };
       delete setting.time;
-      this._call("preview", { setting });
+      await this._call("preview", { setting });
+      await this._refreshPreview();
     } else if (old.preview) this._endPreview();
     try {
       this._sample = await this._hass.callWS({ type: `${WS}/sample`, points: this._draftPoints() });
@@ -431,6 +433,29 @@ class LightingCurvesCard extends HTMLElement {
     }
   }
 
+  _previewStatus() {
+    const p = this._schedule?.preview;
+    return p?.active && p.expires_at
+      ? `Preview ends at ${new Date(p.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+      : "";
+  }
+
+  async _refreshPreview() {
+    try {
+      this._schedules = await this._hass.callWS({ type: `${WS}/schedules` });
+      this._loadedAt = Date.now();
+      if (!this._schedule?.preview?.active) {
+        this._previewing = false;
+        if (this._edit?.kind === "point") {
+          this._edit.data.preview = false;
+          if (this._form) this._form.data = { ...this._edit.data };
+        }
+      }
+      const status = this.shadowRoot.querySelector("#preview-status");
+      if (status) status.textContent = this._previewStatus();
+    } catch (_) { /* Keep the last confirmed state until the next refresh. */ }
+  }
+
   _canPreview() {
     return (this._schedule?.lights || []).length > 0;
   }
@@ -438,7 +463,7 @@ class LightingCurvesCard extends HTMLElement {
   _endPreview() {
     if (!this._previewing) return;
     this._previewing = false;
-    this._call("preview_end", {});
+    this._call("preview_end", {}).then(() => this._refreshPreview());
   }
 
   _call(cmd, extra) {
