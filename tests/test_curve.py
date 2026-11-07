@@ -126,6 +126,11 @@ for pts_, rise, sett in (
     assert target(edge, 29.9, rise, sett)["brightness"] == 5  # fading into the sun point
     assert target(edge, 30, rise, sett)["brightness"] == 60  # the clock point from 00:30
     assert target(edge, 31, rise, sett)["brightness"] == 60
+    assert target(edge, 1440, rise, sett) == target(edge, 0, rise, sett)  # graph end = start
+
+midnight = POINTS([{"time": t, "brightness": b, "color_temp_kelvin": 2700}
+                   for t, b in (("00:00", 60), ("21:00", 20), ("sunset+240", 5))])
+assert target(midnight, 1440, SUNRISE, 1260) == target(midnight, 0, SUNRISE, 1260) == {"brightness": 60, "color_temp_kelvin": 2700}
 
 # Sun points with different anchors can swap places with the seasons: fade in time order.
 cross = POINTS(

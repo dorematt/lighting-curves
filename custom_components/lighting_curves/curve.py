@@ -114,6 +114,7 @@ def _rgb(point) -> tuple:
 
 def target(points: list, now: float, sunrise: float, sunset: float) -> dict:
     """Brightness and colour at `now`, faded between the points either side of it."""
+    now %= DAY  # 24:00 is 00:00: the graph's last sample must match its first
     # Sort by minute. A sun point clamped onto a clock point shares its minute: one
     # carried from the day before (u >= DAY) goes first, one carried back (u < 0)
     # last, so the later of the two takes over at that minute.
