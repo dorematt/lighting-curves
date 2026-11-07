@@ -86,7 +86,7 @@ async def test_area_targets_batched(hass, service_calls):
     assert all(entity.startswith("light.") for entities, _, _, _ in service_calls for entity in entities)
 
 
-async def test_effect_flash_pass_through(hass, service_calls):
+async def test_effect_flash_pass_through(hass, service_calls, curve):
     for params in ({"effect": "colorloop", "brightness": 12}, {"flash": "short", "brightness": 12}):
         hass.states.async_set("light.rgb", "off", RGB)
         await hass.async_block_till_done()
@@ -95,7 +95,13 @@ async def test_effect_flash_pass_through(hass, service_calls):
         await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb", **params},
                                        blocking=True, context=context)
         await hass.async_block_till_done()
-        assert service_calls[0] == (["light.rgb"], "turn_on", params, context)
+        assert service_calls == [(["light.rgb"], "turn_on", params, context)]
+        assert curve.manual["light.rgb"] == {"brightness", "color"}
+        service_calls.clear()
+        await curve.async_update(force=True)
+        await hass.async_block_till_done()
+        assert not service_calls, "the curve must not overwrite an effect or flash"
+        curve.resume("light.rgb")
 
 
 async def test_caller_transition(hass, service_calls):
@@ -245,7 +251,7 @@ async def main():
 
     await test_remaining_group_context(hass, calls, service_calls)
     await test_area_targets_batched(hass, service_calls)
-    await test_effect_flash_pass_through(hass, service_calls)
+    await test_effect_flash_pass_through(hass, service_calls, curve)
     await test_caller_transition(hass, service_calls)
     await test_busy_tick_skipped(curve)
     hass.states.async_set("light.rgb", "off", RGB)

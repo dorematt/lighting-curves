@@ -103,6 +103,12 @@ def register_curve(curve):
             return
         original = dict(data.get("params", {}))
         if "effect" in original or "flash" in original:
+            # Pass through, and tell the owners to leave the light alone once it is on.
+            for entity_id in target_entities(hass, data):
+                state = hass.states.get(entity_id)
+                owner = next((c for c in shared["curves"].values() if entity_id in c.lights()), None)
+                if owner and state and state.state == "off":
+                    owner.passthrough[entity_id] = call.context.id
             return
         if original.get("brightness") == 0 or original.get("white") == 0:
             return  # HA treats brightness zero as turn_off.
@@ -139,7 +145,8 @@ def register_curve(curve):
                 except Exception:
                     # Do not replay a mixed toggle after some targets already succeeded.
                     _LOGGER.exception("Could not forward %s for %s", call.service, entity_id)
-        remaining = [entity_id for entity_id in entities if entity_id not in rewrites]
+        # Only lights with a state: HA skips missing area/device members silently.
+        remaining = [e for e in entities if e not in rewrites and hass.states.get(e)]
         if remaining:
             try:
                 await hass.services.async_call(

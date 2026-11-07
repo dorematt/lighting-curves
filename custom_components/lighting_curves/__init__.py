@@ -69,6 +69,7 @@ class Curve:
         self.target = None
         self.preview = None  # Original participants: entity_id -> was on.
         self.intercepted = {}
+        self.passthrough = {}  # entity_id -> context of an effect/flash turn-on
         self.manual = {}
         self._manual_timeouts = {}
         self._listeners = []
@@ -185,6 +186,11 @@ class Curve:
             return
         if old and old.state == "off":
             self.resume(new.entity_id)
+        passthrough = self.passthrough.pop(new.entity_id, None)
+        if passthrough and passthrough in (event.context.id, event.context.parent_id):
+            self.manual[new.entity_id] = {"brightness", "color"}  # an effect or flash owns the light
+            self._restart_manual_timeout(new.entity_id)
+            return
         intercepted = self.intercepted.pop(new.entity_id, None)
         if self.in_preview(new.entity_id) or is_ours(event.context) or (
             intercepted and intercepted in (event.context.id, event.context.parent_id)
