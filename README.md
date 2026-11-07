@@ -67,6 +67,8 @@ Select **Configure** on a schedule under **Settings → Devices & services → L
 | Initial transition | 1 s | The fade time when a light turns on. |
 | Manual control | Pause all | After a manual change, pause brightness and colour, or only what you changed. |
 | Manual control timeout | 0 (off) | Seconds until the curve takes back a light you changed by hand. With 0, it takes it back at the next off/on. Turning Curve Active off holds without a timer, even after a restart; off/on still resumes. |
+| Separate turn-on | off | For lights that stay dark when a turn-on also sets brightness or colour (for example some Tapo strips). The light turns on plain, then gets the curve with the initial transition. |
+| Turn-on floor | 5% | With separate turn-on: before a light turns off, Lighting Curves dims it to this level, so the next turn-on starts low instead of at its last level. Skipped while Curve Active is off, so manual levels stay. |
 
 ## Card options
 
@@ -109,6 +111,8 @@ lights with Adaptive Lighting.
   logs a warning and sets the light just after it turns on instead.
 - One light, one schedule. This includes lights inside a light group: do not put a light in one schedule
   directly and in another schedule through a group.
+- With separate turn-on, a light can show its last level for a moment before the curve applies. The
+  turn-on floor covers turn-offs through Home Assistant only, not the device's own app or switch.
 - Lights that only do white show the nearest white for an RGB point.
 - A preview lives in memory. If Home Assistant stops during a preview, lights that were on go back to
   the curve when it starts again, but lights that the preview turned on stay on.

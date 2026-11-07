@@ -71,13 +71,14 @@ async def test_area_targets_batched(hass, service_calls):
     service_calls.clear()
     from custom_components.lighting_curves.hass_utils import target_entities
 
-    def area_targets(hass, data):
+    def area_targets(hass, data, expand_group=False):
         if data.get("area_id") == "room":
             return {"sensor.room", "light.rgb", "light.other", "light.other_two"}
-        return target_entities(hass, data)
+        return target_entities(hass, data, expand_group)
 
     with patch("custom_components.lighting_curves.light_control.target_entities", side_effect=area_targets), \
-         patch("custom_components.lighting_curves.target_entities", side_effect=area_targets):
+         patch("custom_components.lighting_curves.target_entities", side_effect=area_targets), \
+         patch("custom_components.lighting_curves.hass_utils.target_entities", side_effect=area_targets):
         await hass.services.async_call("light", "turn_on", {"area_id": "room", "brightness": 12}, blocking=True)
         await hass.async_block_till_done()
     assert len(service_calls) == 2
@@ -111,6 +112,121 @@ async def test_caller_transition(hass, service_calls):
     await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb", "transition": 600}, blocking=True)
     await hass.async_block_till_done()
     assert len(service_calls) == 1 and service_calls[0][2]["transition"] == 600
+
+
+async def test_separate_turn_on(hass, calls, service_calls, curve, fail):
+    curve.entry.options["separate_turn_on"] = True
+    try:
+        hass.states.async_set("light.rgb", "off", RGB)
+        await hass.async_block_till_done()
+        calls.clear()
+        await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb", "brightness": 12, "transition": 3},
+                                       blocking=True)
+        await hass.async_block_till_done()
+        plain, applied = [data for entity, _, data in calls if entity == "light.rgb"]
+        assert plain == {"transition": 3}, "the turn-on must not carry brightness or colour"
+        assert applied["brightness"] == 153 and "rgb_color" in applied and applied["transition"] == 1
+        assert "light.rgb" not in curve.manual
+        for service in ("turn_off", "toggle"):  # dims to the floor (5% = 13) first
+            calls.clear()
+            await hass.services.async_call("light", service, {"entity_id": "light.rgb"}, blocking=True)
+            await hass.async_block_till_done()
+            assert calls == [("light.rgb", "turn_on", {"brightness": 13}), ("light.rgb", service, {})], calls
+            assert hass.states.get("light.rgb").state == "off" and "light.rgb" not in curve.manual
+            await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb"}, blocking=True)
+            await hass.async_block_till_done()
+        hass.states.async_set("light.rgb", "on", {**RGB, "brightness": 8})  # already below the floor
+        calls.clear()
+        await hass.services.async_call("light", "turn_off", {"entity_id": "light.rgb"}, blocking=True)
+        await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb"}, blocking=True)
+        await hass.async_block_till_done()
+        assert calls[0] == ("light.rgb", "turn_off", {}), calls
+        # Both lights in one call get the curve, not only the one kept in the original call.
+        hass.states.async_set("light.ct", "off", CT)
+        hass.states.async_set("light.rgb", "off", {**RGB, "brightness": 13})
+        await hass.async_block_till_done()
+        calls.clear()
+        await hass.services.async_call("light", "turn_on", {"entity_id": ["light.ct", "light.rgb"]}, blocking=True)
+        await hass.async_block_till_done()
+        assert all(hass.states.get(e).attributes["brightness"] == 153 for e in ("light.ct", "light.rgb")), calls
+        # "all" is expanded; the dim keeps the caller's user for HA's permission check.
+        calls.clear()
+        service_calls.clear()
+        user = SimpleNamespace(is_admin=True, permissions=SimpleNamespace(check_entity=lambda e, _: e != "light.ct"))
+        hass.auth = SimpleNamespace(async_get_user=AsyncMock(return_value=user))
+        await hass.services.async_call("light", "turn_off", {"entity_id": "all"}, blocking=True,
+                                       context=Context(user_id="abc"))
+        await hass.async_block_till_done()
+        dims = [c for c in service_calls if c[1] == "turn_on"]
+        assert sorted(c[0][0] for c in dims) == ["light.ct", "light.rgb"] and all(c[2] == {"brightness": 13} for c in dims)
+        assert all(c[3].user_id == "abc" for c in dims)
+        # A non-admin: "all" dims only lights they may control; a target with a denied light,
+        # which HA rejects whole, dims nothing.
+        user.is_admin = False
+        for target, dimmed in (({"entity_id": "all"}, ["light.rgb"]), ({"entity_id": ["light.ct", "light.rgb"]}, [])):
+            for entity in ("light.ct", "light.rgb"):
+                hass.states.async_set(entity, "on", {**hass.states.get(entity).attributes, "brightness": 153})
+            await hass.async_block_till_done()
+            service_calls.clear()
+            await hass.services.async_call("light", "turn_off", target, blocking=True, context=Context(user_id="abc"))
+            await hass.async_block_till_done()
+            assert [c[0][0] for c in service_calls if c[1] == "turn_on"] == dimmed, service_calls
+        # A rejected mixed toggle (allowed light on, denied light off) is left whole for HA to reject.
+        hass.states.async_set("light.ct", "off", CT)
+        await hass.async_block_till_done()
+        service_calls.clear()
+        await hass.services.async_call("light", "toggle", {"entity_id": ["light.ct", "light.rgb"]}, blocking=True,
+                                       context=Context(user_id="abc"))
+        # (The fake handler does not enforce permissions, so the curve then applies to the light it turned on.)
+        assert service_calls[0][:3] == (["light.ct", "light.rgb"], "toggle", {}), service_calls
+        assert not any(c[2] == {"brightness": 13} for c in service_calls), service_calls
+        user.is_admin = True
+        from homeassistant.helpers import target as target_helpers
+        if hasattr(target_helpers, "async_extract_excluded_entity_ids"):  # exclude blocks: HA 2026.11+
+            for entity in ("light.ct", "light.rgb"):
+                hass.states.async_set(entity, "on", {**hass.states.get(entity).attributes, "brightness": 153})
+            await hass.async_block_till_done()
+            service_calls.clear()
+            await hass.services.async_call("light", "turn_off", {"entity_id": "all", "exclude": {"entity_id": ["light.ct"]}},
+                                           blocking=True)
+            assert [c[0][0] for c in service_calls if c[1] == "turn_on"] == ["light.rgb"], service_calls
+        # The curve leaves a floored light alone until its turn-off finishes, then for the grace time.
+        hass.states.async_set("light.rgb", "on", {**RGB, "brightness": 153})
+        await hass.async_block_till_done()
+        fail.add("light.rgb")
+        try:
+            await hass.services.async_call("light", "turn_off", {"entity_id": "light.rgb"}, blocking=True)
+        except HomeAssistantError:
+            pass
+        fail.clear()
+        assert 0 < curve.closing["light.rgb"] - hass.loop.time() <= 5
+        curve.closing.clear()
+        hass.states.async_set("light.rgb", "off", RGB)
+        hass.states.async_set("light.ct", "off", CT)
+        await hass.async_block_till_done()
+        # An interval update between the dim and the turn-off does not raise the light again.
+        await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb"}, blocking=True)
+        await hass.async_block_till_done()
+        curve.closing["light.rgb"] = hass.loop.time() + 5
+        hass.states.async_set("light.rgb", "on", {**RGB, "brightness": 13})
+        calls.clear()
+        await curve.async_update(force=True)
+        assert not [c for c in calls if c[0] == "light.rgb"], calls
+        hass.states.async_set("light.rgb", "off", RGB)
+        await hass.async_block_till_done()
+        assert "light.rgb" not in curve.closing
+        await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb"}, blocking=True)
+        await hass.async_block_till_done()
+        curve.hold("light.rgb")  # Curve Active off: leave the manual level alone
+        calls.clear()
+        await hass.services.async_call("light", "turn_off", {"entity_id": "light.rgb"}, blocking=True)
+        await hass.async_block_till_done()
+        assert calls == [("light.rgb", "turn_off", {})]
+    finally:
+        curve.entry.options["separate_turn_on"] = False
+        curve.resume("light.rgb")
+        hass.states.async_set("light.ct", "on", {**CT, "brightness": 153})
+        await hass.async_block_till_done()
 
 
 async def test_busy_tick_skipped(curve):
@@ -211,12 +327,14 @@ async def main():
     fail = set()
 
     def schema(data):
-        targets = {"entity_id", "area_id", "device_id"}
+        targets = {"entity_id", "area_id", "device_id", "exclude"}
         return {**{k: v for k, v in data.items() if k in targets},
                 "params": {k: v for k, v in data.items() if k not in targets}}
 
     async def handler(call):
         entities = call.data["entity_id"]
+        if entities == "all":
+            entities = hass.states.async_entity_ids("light")
         if isinstance(entities, str):
             entities = [entities]
         service_calls.append((list(entities), call.service, dict(call.data["params"]), call.context))
@@ -253,6 +371,7 @@ async def main():
     await test_area_targets_batched(hass, service_calls)
     await test_effect_flash_pass_through(hass, service_calls, curve)
     await test_caller_transition(hass, service_calls)
+    await test_separate_turn_on(hass, calls, service_calls, curve, fail)
     await test_busy_tick_skipped(curve)
     hass.states.async_set("light.rgb", "off", RGB)
     await hass.async_block_till_done()
@@ -402,7 +521,7 @@ async def main():
     flow = LightingCurvesOptionsFlow()
     flow.hass, flow.handler = hass, entry.entry_id
     form = await flow.async_step_init()
-    assert len(form["data_schema"].schema) == 6
+    assert len(form["data_schema"].schema) == 8
     lights_key = next(k for k in form["data_schema"].schema if k == "lights")
     assert lights_key.description["suggested_value"] == ["light.ct"]  # existing lights only
     result = await flow.async_step_init({**DEFAULTS, "lights": ["light.ct"], "transition": 20})
@@ -412,7 +531,7 @@ async def main():
     entry.options = {**entry.options, "lights": ["light.ct"]}
     await test_migration_duplicate_ownership()
     await test_setup_cleanup_and_overlap(hass)
-    print("ok: capabilities, contexts, batched targets, effect/flash, transitions, tolerances, busy ticks, migration ownership, setup cleanup, manual control, preview rollback/unload, fallback")
+    print("ok: capabilities, contexts, batched targets, effect/flash, transitions, separate turn-on, tolerances, busy ticks, migration ownership, setup cleanup, manual control, preview rollback/unload, fallback")
 
 
 test_context_ownership()

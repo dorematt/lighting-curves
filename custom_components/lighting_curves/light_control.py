@@ -12,7 +12,12 @@ import logging
 from homeassistant.core import Context
 from homeassistant.util import color
 
-from .hass_utils import setup_service_call_interceptor, target_entities
+from .hass_utils import acted_on, setup_service_call_interceptor, target_entities
+
+# The curve leaves a floored light alone until its turn-off finishes, then for this long while
+# the device reports off. CLOSING_LIMIT caps it if the hook never hears back.
+CLOSING_GRACE = 5
+CLOSING_LIMIT = 60
 
 DOMAIN = "lighting_curves"
 DEFAULTS = {
@@ -21,6 +26,8 @@ DEFAULTS = {
     "initial_transition": 1,
     "manual_control_mode": "pause_all",
     "manual_control_timeout": 0,
+    "separate_turn_on": False,
+    "turn_on_floor": 5,
 }
 BRIGHTNESS_KEYS = {"brightness", "brightness_pct", "brightness_step", "brightness_step_pct", "white"}
 COLOR_KEYS = {"color_temp_kelvin", "color_temp", "kelvin", "rgb_color", "rgbw_color", "rgbww_color",
@@ -29,8 +36,13 @@ CONTROL_KEYS = BRIGHTNESS_KEYS | COLOR_KEYS | {"profile", "flash"}
 _LOGGER = logging.getLogger(__name__)
 
 
+def caller_context(parent):
+    """A child context that keeps the caller's user, so HA still checks their permissions."""
+    return Context(user_id=parent.user_id, parent_id=parent.id)
+
+
 def own_context(parent=None):
-    context = Context(parent_id=parent.id if parent else None)
+    context = caller_context(parent) if parent else Context()
     # Preserve a valid ULID for HA's recorder, with a recognizable random-section marker.
     context.id = context.id[:10] + "1C1C1C1C" + context.id[18:]
     return context
@@ -98,9 +110,56 @@ def register_curve(curve):
     if len(shared["curves"]) > 1:
         return
 
+    def owner_of(entity_id):
+        return next((c for c in shared["curves"].values() if entity_id in c.lights()), None)
+
+    async def floor_before_off(call, targets):
+        """Separate turn-on: dim curve-active lights to the floor so the next plain turn-on starts there.
+
+        Returns a callback for when the turn-off finishes. Light groups forward the turn-off to
+        their members, and those calls pass through here again.
+        """
+        floored = []
+        for entity_id in targets:
+            owner, state = owner_of(entity_id), hass.states.get(entity_id)
+            level = owner and round(owner.option("turn_on_floor") * 255 / 100)
+            if (not owner or not owner.option("separate_turn_on") or not state or state.state != "on"
+                    or entity_id in owner.manual or owner.in_preview(entity_id)
+                    or not set(state.attributes.get("supported_color_modes", [])) - {"onoff", "unknown"}
+                    or (state.attributes.get("brightness") or 256) <= level):  # never brighten on the way off
+                continue
+            try:
+                # Under the apply lock, and closing, so an interval update cannot raise it again.
+                async with owner._apply_lock:
+                    owner.closing[entity_id] = hass.loop.time() + CLOSING_LIMIT
+                    floored.append((owner, entity_id))
+                    await hass.services.async_call("light", "turn_on", {
+                        "entity_id": entity_id, "brightness": level,
+                    }, blocking=True, context=own_context(call.context))
+            except Exception as err:  # e.g. Unauthorized: HA checks the caller's permissions
+                # The turn-off still goes ahead; the next turn-on starts at the old level.
+                _LOGGER.warning("Could not dim %s to its floor before turn-off: %r", entity_id, err)
+
+        def finished():
+            deadline = hass.loop.time() + CLOSING_GRACE
+            for owner, entity_id in floored:
+                if entity_id in owner.closing:  # Not yet reported off.
+                    owner.closing[entity_id] = deadline
+
+        return finished if floored else None
+
     async def intercept(call, data):
         if is_ours(call.context):
-            return
+            return None
+        targets = await acted_on(hass, call, data)
+        if targets is None:
+            return None  # HA rejects the whole call: dim nothing and do not split it.
+        finished = await floor_before_off(call, targets) if call.service != "turn_on" else None
+        if call.service != "turn_off":
+            await rewrite_turn_on(call, data)
+        return finished
+
+    async def rewrite_turn_on(call, data):
         original = dict(data.get("params", {}))
         if "effect" in original or "flash" in original:
             return
@@ -108,12 +167,19 @@ def register_curve(curve):
             return  # HA treats brightness zero as turn_off.
         entities = sorted(entity for entity in target_entities(hass, data) if entity.startswith("light."))
         rewrites = {}
+        separate = set()
         for entity_id in entities:
             state = hass.states.get(entity_id)
-            owner = next((c for c in shared["curves"].values() if entity_id in c.lights()), None)
+            owner = owner_of(entity_id)
             if not owner or not state or state.state != "off" or owner.in_preview(entity_id):
                 continue
             owner.resume(entity_id)
+            if owner.option("separate_turn_on"):
+                # Plain turn-on (some devices ignore one that carries brightness or colour);
+                # the state listener applies the curve once the light reports on.
+                rewrites[entity_id] = {}
+                separate.add(entity_id)
+                continue
             owner.calculate_target()
             rewrites[entity_id] = with_transition(
                 light_data(state, owner.target), original.get("transition", owner.option("initial_transition"))
@@ -133,8 +199,9 @@ def register_curve(curve):
             else:
                 try:
                     await hass.services.async_call(
-                        "light", call.service, {"entity_id": entity_id, **params},
-                        blocking=True, context=own_context(call.context),
+                        "light", call.service, {"entity_id": entity_id, **params}, blocking=True,
+                        # Separate turn-on: not ours, so the state listener applies the curve.
+                        context=(caller_context if entity_id in separate else own_context)(call.context),
                     )
                 except Exception:
                     # Do not replay a mixed toggle after some targets already succeeded.
@@ -145,13 +212,13 @@ def register_curve(curve):
             try:
                 await hass.services.async_call(
                     "light", call.service, {"entity_id": remaining, **original},
-                    blocking=True, context=Context(parent_id=call.context.id),
+                    blocking=True, context=caller_context(call.context),
                 )
             except Exception:
                 _LOGGER.exception("Could not forward %s for %s", call.service, remaining)
 
     try:
-        for service in ("turn_on", "toggle"):
+        for service in ("turn_on", "toggle", "turn_off"):
             shared["hooks"].append(setup_service_call_interceptor(hass, "light", service, intercept))
     except (RuntimeError, AttributeError, TypeError):
         while shared["hooks"]:

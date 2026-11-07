@@ -120,7 +120,7 @@ async def main():
     flow = LightingCurvesOptionsFlow()
     flow.hass, flow.handler = hass, "two"
     form = await flow.async_step_init()
-    assert len(form["data_schema"].schema) == 6
+    assert len(form["data_schema"].schema) == 8
     result = await flow.async_step_init({**DEFAULTS, "lights": ["switch.demo"]})
     assert result["errors"] == {"lights": "invalid_lights"} and entries[0].options["lights"] == ["light.demo"]
     result = await flow.async_step_init({**DEFAULTS, "lights": ["light.demo"], "transition": 20})

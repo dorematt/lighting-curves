@@ -72,6 +72,7 @@ class Curve:
         self.preview = None  # Original participants: entity_id -> was on.
         self.intercepted = {}
         self.passthrough = {}  # entity_id -> context of an effect/flash turn-on
+        self.closing = {}  # entity_id -> loop time until which a floored light is left alone
         self.manual = {}
         self._held = set()
         self.async_sync_switches = None
@@ -212,6 +213,8 @@ class Curve:
 
     async def _async_light_changed(self, event):
         old, new = event.data["old_state"], event.data["new_state"]
+        if new and new.state != STATE_ON:
+            self.closing.pop(new.entity_id, None)
         if not new or new.state != STATE_ON or (old and old.state == STATE_ON):
             return
         if old and old.state == "off":
@@ -272,6 +275,7 @@ class Curve:
                     continue
                 if not restore and setting is None and (
                     entity_id not in self.lights() or state.state != STATE_ON or self.in_preview(entity_id)
+                    or self.closing.get(entity_id, 0) > self.hass.loop.time()
                 ):
                     continue
                 data = light_data(state, setting or self.target, () if restore or setting else self.manual.get(entity_id, ()))
