@@ -3,16 +3,40 @@
     "step": {
       "user": {
         "title": "Add a lighting curve",
-        "description": "Name the schedule (for example the room). Pick an Adaptive Lighting switch to have the schedule drive its lights. Leave it empty for a schedule that only provides a sensor, for use in your own automations.",
-        "data": { "name": "Name", "switch": "Adaptive Lighting switch" }
+        "description": "Name the schedule (for example the room). Choose its lights and edit its curve with the Lighting Curves dashboard card.",
+        "data": {
+          "name": "Name"
+        }
       }
     },
     "error": {
-      "not_main_switch": "Pick the main Adaptive Lighting switch, not its sleep mode or adapt switches.",
       "empty_name": "Give the schedule a name."
     },
     "abort": {
-      "already_configured": "A schedule with this name or switch already exists."
+      "already_configured": "A schedule with this name already exists."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Light control",
+        "description": "Lights follow the curve while on. Manual changes pause adaptation; turning a light off and on resumes it. A manual control timeout of 0 disables automatic resumption.",
+        "data": {
+          "interval": "Update interval",
+          "transition": "Transition",
+          "initial_transition": "Turn-on transition",
+          "manual_control_mode": "Manual control",
+          "manual_control_timeout": "Manual control timeout"
+        }
+      }
+    }
+  },
+  "selector": {
+    "manual_control_mode": {
+      "options": {
+        "pause_all": "Pause brightness and colour",
+        "pause_changed": "Pause only changed attributes"
+      }
     }
   }
 }

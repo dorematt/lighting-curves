@@ -3,7 +3,6 @@
 // Served and registered by the integration; no build step.
 
 const WS = "lighting_curves";
-const AL_LINK = "https://my.home-assistant.io/redirect/hacs_repository/?owner=basnijholt&repository=adaptive-lighting&category=integration";
 const ANCHORS = [
   ["clock", "Clock time"],
   ["sunrise", "Sunrise"],
@@ -81,7 +80,6 @@ const LABELS = {
   rgb_color: "Colour",
   preview: "Preview on the lights",
   lights: "",
-  adaptive: "Use Adaptive Lighting",
   name: "Name (for example the room)",
 };
 
@@ -280,7 +278,7 @@ class LightingCurvesCard extends HTMLElement {
         <ha-icon icon="mdi:lightbulb-group"></ha-icon>
         <span class="when"><span>Lights</span><span class="sub">${
           names.length
-            ? `${esc(names.join(", "))} · ${s.adaptive ? "Adaptive Lighting" : "Set when turned on"}`
+            ? esc(names.join(", "))
             : "None: the schedule is only a sensor"
         }</span></span>
         <ha-icon class="chev" icon="mdi:chevron-right"></ha-icon>
@@ -323,13 +321,7 @@ class LightingCurvesCard extends HTMLElement {
     const canDelete = e.kind === "point" && e.index !== null && this._schedule.points.length > 1;
     const title = { lights: "Lights", new: "New schedule", point: e.index === null ? "New point" : "Edit point" }[e.kind];
     const help = {
-      lights: `${
-        this._schedule?.al_available
-          ? ""
-          : `<p class="warn">Requires the Adaptive Lighting integration to be installed. <a href="${AL_LINK}" target="_blank" rel="noreferrer">Get Adaptive Lighting</a></p>`
-      }<p><b>On</b> – Will use the Adaptive Lighting integration to keep the light following the curve over time.<br>
-        <b>Off</b> – Light will only update its brightness and colour when triggered.</p>
-        <p>A light follows one schedule: one you add here leaves its other schedule. With no lights the schedule is only a sensor.</p>`,
+      lights: "<p>Lights follow the curve while on. Changing brightness or colour pauses adaptation until the light turns off and on again (or the configured timeout).</p><p>A light follows one schedule: adding it here moves it from its other schedule. With no lights the schedule is only a sensor.</p>",
       new: "The schedule starts with a default day curve and no lights.",
     }[e.kind];
     return `<div class="editor">
@@ -361,10 +353,7 @@ class LightingCurvesCard extends HTMLElement {
   }
 
   _openOther(kind) {
-    this._edit = { kind, data: kind === "lights" ? {
-              lights: [...this._schedule.lights],
-              adaptive: this._schedule.adaptive || (!this._schedule.lights.length && this._schedule.al_available),
-            } : { name: "" } };
+    this._edit = { kind, data: kind === "lights" ? { lights: [...this._schedule.lights] } : { name: "" } };
     this._render();
   }
 
@@ -373,7 +362,6 @@ class LightingCurvesCard extends HTMLElement {
     if (e.kind === "lights")
       return [
         { name: "lights", selector: { entity: { domain: "light", multiple: true } } },
-        { name: "adaptive", selector: { boolean: {} }, disabled: !this._schedule.al_available },
       ];
     if (e.kind === "new") return [{ name: "name", required: true, selector: { text: {} } }];
     return formSchema(e.data, this._canPreview());
@@ -383,7 +371,7 @@ class LightingCurvesCard extends HTMLElement {
     const e = this._edit;
     try {
       if (e.kind === "lights") {
-        await this._hass.callWS({ type: `${WS}/set_lights`, entry_id: this._current, lights: e.data.lights || [], adaptive: !!e.data.adaptive });
+        await this._hass.callWS({ type: `${WS}/set_lights`, entry_id: this._current, lights: e.data.lights || [] });
       } else {
         if (!e.data.name?.trim()) {
           this._toast("A schedule needs a name");
