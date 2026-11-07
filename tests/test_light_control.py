@@ -294,6 +294,9 @@ async def main():
     await hass.async_block_till_done()
     await hass.services.async_call("light", "turn_off", {"entity_id": "light.other"}, blocking=True)
     await hass.async_block_till_done()
+    curve.hold("light.ct")
+    curve.manual["light.rgb"] = {"color"}
+    curve._restart_manual_timeout("light.rgb", 30)
     await curve.async_preview(RED)
     await hass.async_block_till_done()
     assert curve.preview == {"light.ct": True, "light.rgb": False} and curve._preview_timeout
@@ -306,6 +309,7 @@ async def main():
     await hass.async_block_till_done()
     assert hass.states.get("light.ct").attributes["brightness"] == 153
     assert curve.preview_state() == {"active": False, "expires_at": None}
+    assert not curve.manual and not curve._held and not curve._manual_timeouts
     assert hass.states.get("light.rgb").state == "off" and hass.states.get("light.other").state == "off"
     assert not any(entity == "light.other" for entity, _, _ in calls)
 

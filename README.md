@@ -86,7 +86,9 @@ Select **Configure** on a schedule under **Settings → Devices & services → L
   this sensor, for your own automations.
 - One **Light name Curve Active** switch per assigned light, on the schedule device. Turn it on to
   resume and apply the curve to an on light; off pauses both brightness and colour until resumed or
-  the light cycles off/on. An off light stays off.
+  the light cycles off/on. An off light stays off. The switch stays available when the light is
+  unavailable. Returning from unavailable to on (such as after a power cut at the wall) does not
+  resume a hold; only off→on or turning Curve Active on does.
 - The actions `lighting_curves.create_schedule`, `set_points`, `set_lights` and `get_schedules`.
 - Diagnostics: download them from the schedule's menu when you report a problem.
 

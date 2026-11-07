@@ -8,6 +8,7 @@ sys.path.insert(0, ".")
 from homeassistant.core import Context, Event, HomeAssistant, State, callback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.entity import Entity
+from homeassistant.helpers import area_registry as ar, entity_registry as er
 from custom_components.lighting_curves import Curve, _async_options_updated, async_setup_entry
 from custom_components.lighting_curves.api import schedules, set_lights
 from custom_components.lighting_curves.diagnostics import async_get_config_entry_diagnostics
@@ -21,14 +22,14 @@ async def main():
     attrs = {"friendly_name": "Demo Lamp", "supported_color_modes": ["color_temp"],
              "min_color_temp_kelvin": 2000, "max_color_temp_kelvin": 6500,
              "brightness": 11, "color_temp_kelvin": 2700}
-    hass.states.async_set("light.demo", "on", attrs)
-    hass.states.async_set("light.other", "off", attrs)
-    calls, entities, registry_entries, cleanup = [], {}, {}, []
-    restored = {"light.demo": "off", "light.other": "on"}
+    calls, entities, cleanup = [], {}, []
+    restored = {"light.demo": ("off", {"held": True, "paused_axes": ["brightness", "color"]}),
+                "light.other": ("on", {})}
     entry = SimpleNamespace(entry_id="schedule", domain="lighting_curves", title="Schedule", options={
         **DEFAULTS, "manual_control_timeout": 30, "points": [{"time": "00:00", **setting}],
         "lights": ["light.demo"],
-    }, async_on_unload=cleanup.append, add_update_listener=lambda _: lambda: None)
+    }, pref_disable_new_entities=False, disabled_by=None,
+        async_on_unload=cleanup.append, add_update_listener=lambda _: lambda: None)
 
     async def light_service(call):
         calls.append(dict(call.data))
@@ -42,18 +43,23 @@ async def main():
             setattr(updated, key, value)
 
     async def last_state(entity):
-        return State(entity.entity_id, restored[entity.light]) if entity.light in restored else None
+        saved = restored.get(entity.entity_id, restored.get(entity.light))
+        return State(entity.entity_id, *saved) if saved else None
 
     async def add_entities(added):
         for entity in added:
             entity.hass = hass
-            entity.entity_id = f"switch.{entity.light.split('.')[1]}_curve_active"
+            registered = registry.async_get_or_create("switch", "lighting_curves", entity.unique_id,
+                config_entry=entry, suggested_object_id=f"{entity.light.split('.')[1]}_curve_active")
+            entity.entity_id = registered.entity_id
 
             @callback
             def write(entity=entity):
-                hass.states.async_set(entity.entity_id, "on" if entity.is_on else "off")
+                hass.states.async_set(entity.entity_id, "on" if entity.is_on else "off", entity.extra_state_attributes)
 
             async def remove(entity=entity):
+                state = hass.states.get(entity.entity_id)
+                restored[entity.entity_id] = (state.state, dict(state.attributes))
                 await Entity.async_internal_will_remove_from_hass(entity)
                 hass.states.async_remove(entity.entity_id)
                 entities.pop(entity.light)
@@ -61,13 +67,15 @@ async def main():
             entity.async_write_ha_state = write
             entity.async_remove = remove
             entities[entity.light] = entity
-            registry_entries[entity.entity_id] = SimpleNamespace(
-                domain="switch", unique_id=entity.unique_id, entity_id=entity.entity_id,
-            )
             await entity.async_added_to_hass()
             write()
 
-    registry = SimpleNamespace(async_remove=lambda entity_id: registry_entries.pop(entity_id), async_get=lambda _: None)
+    registry = er.EntityRegistry(hass)
+    registry.entities = er.EntityRegistryItems(hass)
+    registry._entities_data = registry.entities.data
+    registry.deleted_entities = {}
+    registry.settings = er.EntityRegistrySettings()
+    await ar.async_load(hass, load_empty=True)
     platform = SimpleNamespace(async_add_entities=add_entities)
 
     async def forward(updated, platforms):
@@ -78,16 +86,21 @@ async def main():
         async_forward_entry_setups=forward, async_entries=lambda domain: [entry] if domain == entry.domain else [],
         async_update_entry=update, async_loaded_entries=lambda domain: [entry], async_get_entry=lambda _: entry,
     )
+    registered_light = registry.async_get_or_create("light", "demo", "lamp", suggested_object_id="demo")
+    old_switch = registry.async_get_or_create("switch", "lighting_curves", "schedule_light.demo_curve_active",
+        config_entry=entry, suggested_object_id="my_curve_control", hidden_by=er.RegistryEntryHider.USER)
+    area = ar.async_get(hass).async_create("Bedroom")
+    old_switch = registry.async_update_entity(old_switch.entity_id, name="My curve", area_id=area.id)
+    hass.states.async_set("light.demo", "on", attrs)
+    hass.states.async_set("light.other", "off", attrs)
     with patch("custom_components.lighting_curves.switch.async_get_current_platform", return_value=platform), \
          patch("custom_components.lighting_curves.switch.er.async_get", return_value=registry), \
-         patch("custom_components.lighting_curves.switch.er.async_entries_for_config_entry",
-               side_effect=lambda *_: list(registry_entries.values())), \
          patch.object(RestoreEntity, "async_added_to_hass", AsyncMock()), \
          patch.object(CurveActiveSwitch, "async_get_last_state", last_state), \
          patch.object(Curve, "calculate_target", lambda curve: setattr(curve, "target", dict(setting))):
         # Light state may not exist yet at startup; use its registry/device friendly name.
         entry.runtime_data = Curve(hass, entry)
-        with patch.object(registry, "async_get", return_value=SimpleNamespace()), \
+        with patch.object(registry, "async_get", return_value=SimpleNamespace(id="not_loaded")), \
              patch("custom_components.lighting_curves.switch.er.async_get_legacy_friendly_name", return_value="Demo Lamp"):
             assert CurveActiveSwitch(entry, "light.not_loaded").translation_placeholders == {"light": "Demo Lamp"}
 
@@ -97,9 +110,30 @@ async def main():
         switch = entities["light.demo"]
         assert not calls and not switch.is_on and curve.manual["light.demo"] == {"brightness", "color"}
         assert "light.demo" in curve._held and not curve._manual_timeouts
-        assert switch.unique_id == "schedule_light.demo_curve_active"
+        assert switch.unique_id == f"schedule_{registered_light.id}_curve_active"
+        migrated = registry.async_get(switch.entity_id)
+        assert migrated.id == old_switch.id and migrated.entity_id == old_switch.entity_id
+        assert migrated.name == "My curve" and migrated.area_id == area.id and migrated.hidden_by == er.RegistryEntryHider.USER
+        assert CurveActiveSwitch(entry, "light.unregistered").unique_id == "schedule_light.unregistered_curve_active"
         assert switch.device_info["identifiers"] == {("lighting_curves", entry.entry_id)}
         assert switch.has_entity_name and switch.translation_placeholders == {"light": "Demo Lamp"}
+
+        # A restart retains a manual pause's axes and starts a full configured timeout.
+        curve.resume("light.demo")
+        with patch("custom_components.lighting_curves.async_call_later") as later:
+            await switch.async_remove()
+            restored[switch.entity_id] = ("off", {"held": False, "paused_axes": ["brightness"]})
+            await add_entities([CurveActiveSwitch(entry, "light.demo")])
+            switch = entities["light.demo"]
+            assert curve.manual == {"light.demo": {"brightness"}} and not curve._held
+            assert later.call_args.args[1] == 30 and not switch.is_on
+            await later.call_args.args[2](None)
+            await hass.async_block_till_done()
+            assert switch.is_on and not curve.manual and not curve._manual_timeouts
+        calls.clear()
+        hass.states.async_set("light.demo", "on", attrs)
+        await hass.async_block_till_done()
+        curve.hold("light.demo")
 
         # Resume applies once with regular transition; timeout is cancelled too.
         await switch.async_turn_on()
@@ -150,30 +184,51 @@ async def main():
         assert switch.is_on and hass.states.get(switch.entity_id).state == "on"
         assert hass.states.get("light.demo").attributes["brightness"] == 153
 
+        # Preview end takes a held participant back and updates its switch.
+        await switch.async_turn_off()
+        await curve.async_preview({"brightness": 20, "color_temp_kelvin": 2700})
+        assert not switch.is_on
+        await curve.async_end_preview()
+        await hass.async_block_till_done()
+        assert switch.is_on and not curve.manual and not curve._held
+        assert hass.states.get(switch.entity_id).state == "on"
+        assert hass.states.get("light.demo").attributes["brightness"] == 153
+
         # Options/API assignment changes create and remove entities and registry entries.
         set_lights(hass, entry, ["light.demo", "light.other"])
         await _async_options_updated(hass, entry)
-        assert entities["light.other"].is_on and len(registry_entries) == 2
+        assert entities["light.other"].is_on and len(er.async_entries_for_config_entry(registry, entry.entry_id)) == 2
         set_lights(hass, entry, ["light.demo"])
         await _async_options_updated(hass, entry)
-        assert "light.other" not in entities and "switch.other_curve_active" not in registry_entries
+        assert "light.other" not in entities and registry.async_get("switch.other_curve_active") is None
 
         # Registry renames carry explicit holds with no timer; registry deletion removes the switch.
         await switch.async_turn_off()
-        hass.states.async_set("light.renamed", "on", attrs)
-        await curve._registry_changed(Event("entity_registry_updated", {
-            "action": "update", "entity_id": "light.renamed", "changes": {"entity_id": "light.demo"},
-        }))
+        await hass.async_block_till_done()
+        with patch.object(curve, "_manual_changed", wraps=curve._manual_changed) as changed:
+            registry.async_update_entity("light.demo", new_entity_id="light.renamed")
+            hass.states.async_set("light.renamed", "on", attrs)
+            await hass.async_block_till_done()
+            assert all(call.args[0] != "light.demo" for call in changed.call_args_list)
         await _async_options_updated(hass, entry)
         assert "light.demo" not in entities and not entities["light.renamed"].is_on
+        renamed = entities["light.renamed"]
+        assert renamed.entity_id == switch.entity_id and renamed.unique_id == switch.unique_id
+        assert registry.async_get(renamed.entity_id).id == old_switch.id
+        assert registry.async_get(renamed.entity_id).name == "My curve"
+        assert registry.async_get(renamed.entity_id).area_id == area.id
+        assert registry.async_get(renamed.entity_id).hidden_by == er.RegistryEntryHider.USER
         assert curve._held == {"light.renamed"} and not curve._manual_timeouts
-        await curve._registry_changed(Event("entity_registry_updated", {"action": "remove", "entity_id": "light.renamed"}))
+        with patch.object(curve, "_manual_changed", wraps=curve._manual_changed) as changed:
+            registry.async_remove("light.renamed")
+            await hass.async_block_till_done()
+            changed.assert_not_called()
         await _async_options_updated(hass, entry)
-        assert not entities and not registry_entries and not curve.manual and not curve._held
+        assert not entities and not er.async_entries_for_config_entry(registry, entry.entry_id) and not curve.manual and not curve._held
 
     while cleanup:
         cleanup.pop()()
-    print("ok: switch restore before first apply, manual/timeout state, resume/transition/off light, held ticks, off/on, API/diagnostics, dynamic membership, rename/remove")
+    print("ok: held/manual-axis restore and timeout, registry UUID migration and rename preserve custom entity/hold, no old-ID signals, preview resumes switch, light control and membership")
 
 
 asyncio.run(main())

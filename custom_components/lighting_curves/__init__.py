@@ -248,9 +248,11 @@ class Curve:
             _LOGGER.info("Followed light rename %s -> %s for schedule %s", old_id, new_id, self.entry.title)
         else:
             return
-        manual, timer = self.manual.get(old_id), self._manual_timeouts.get(old_id)
+        manual, timer = self.manual.pop(old_id, None), self._manual_timeouts.pop(old_id, None)
         held = old_id in self._held
-        self.resume(old_id)
+        self._held.discard(old_id)
+        if timer:
+            timer[0]()
         if data["action"] == "update" and manual:
             self.manual[new_id] = manual
             if held:
@@ -333,6 +335,7 @@ class Curve:
                     failed = True
                     _LOGGER.exception("Could not restore preview light %s", entity_id)
                 else:
+                    self.resume(entity_id)
                     self.preview.pop(entity_id, None)
             if failed:
                 self.async_restart_preview_timeout()

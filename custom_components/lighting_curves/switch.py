@@ -10,6 +10,11 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from . import DOMAIN
 
 
+def _unique_id(entry, light):
+    registered = er.async_get(entry.runtime_data.hass).async_get(light)
+    return f"{entry.entry_id}_{registered.id if registered else light}_curve_active"
+
+
 async def async_setup_entry(hass, entry, async_add_entities):
     curve = entry.runtime_data
     platform = async_get_current_platform()
@@ -18,7 +23,12 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async def sync_switches():
         lights = curve.lights()
         registry = er.async_get(hass)
-        wanted = {f"{entry.entry_id}_{light}_curve_active" for light in lights}
+        wanted = {_unique_id(entry, light) for light in lights}
+        for light in lights:
+            old_unique_id = f"{entry.entry_id}_{light}_curve_active"
+            unique_id = _unique_id(entry, light)
+            if unique_id != old_unique_id and (entity_id := registry.async_get_entity_id("switch", DOMAIN, old_unique_id)):
+                registry.async_update_entity(entity_id, new_unique_id=unique_id)
         for light in list(switches):
             if light not in lights:
                 entity = switches.pop(light)
@@ -37,7 +47,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class CurveActiveSwitch(SwitchEntity, RestoreEntity):
-    """An off switch holds both axes, regardless of the manual timeout option."""
+    """Report manual pauses and explicitly hold or resume a scheduled light."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "curve_active"
@@ -54,13 +64,17 @@ class CurveActiveSwitch(SwitchEntity, RestoreEntity):
         )
         name = name or light.removeprefix("light.").replace("_", " ")
         self._attr_translation_placeholders = {"light": name}
-        self._attr_unique_id = f"{entry.entry_id}_{light}_curve_active"
+        self._attr_unique_id = _unique_id(entry, light)
         self._attr_device_info = {"identifiers": {(DOMAIN, entry.entry_id)}, "name": entry.title}
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
-        if (state := await self.async_get_last_state()) and state.state == STATE_OFF:
-            self._curve.hold(self.light)
+        if (state := await self.async_get_last_state()) and state.state == STATE_OFF and self.light not in self._curve.manual:
+            if state.attributes.get("held", True):
+                self._curve.hold(self.light)
+            else:
+                self._curve.manual[self.light] = set(state.attributes["paused_axes"])
+                self._curve._restart_manual_timeout(self.light)
         self.async_on_remove(async_dispatcher_connect(
             self.hass, f"{DOMAIN}_{self._curve.entry.entry_id}_{self.light}_active", self._updated,
         ))
@@ -72,6 +86,11 @@ class CurveActiveSwitch(SwitchEntity, RestoreEntity):
     @property
     def is_on(self):
         return self.light not in self._curve.manual
+
+    @property
+    def extra_state_attributes(self):
+        return {"held": self.light in self._curve._held,
+                "paused_axes": sorted(self._curve.manual.get(self.light, ()))}
 
     async def async_turn_on(self, **kwargs):
         self._curve.resume(self.light)
