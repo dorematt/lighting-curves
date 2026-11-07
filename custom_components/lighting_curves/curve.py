@@ -10,6 +10,7 @@ of the next day. All times are minutes since local midnight.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 import re
 
 import voluptuous as vol
@@ -73,7 +74,12 @@ def ordered(points: list) -> list:
 
 
 def resolve(points: list, sunrise: float, sunset: float) -> list:
-    """Today's minute for each point of ordered(points).
+    """Today's minute (0-1439) for each point of ordered(points)."""
+    return [t % DAY for t in _unwrapped(points, sunrise, sunset)]
+
+
+def _unwrapped(points: list, sunrise: float, sunset: float) -> list:
+    """Each point's minute in ordered()'s frame, before wrapping to 0-1439.
 
     A sun-relative point cannot move past the clock-time points on each side of it,
     so a late summer sunset cannot carry an evening point past a fixed 20:30.
@@ -96,7 +102,7 @@ def resolve(points: list, sunrise: float, sunset: float) -> list:
             lo = max((c for c in clock[:i] if c is not None), default=clocks[-1] - DAY)
             hi = min((c for c in clock[i + 1 :] if c is not None), default=clocks[0] + DAY)
             t = min(max(t, lo), hi)
-        times[i] = t % DAY
+        times[i] = t
     return times
 
 
@@ -108,18 +114,17 @@ def _rgb(point) -> tuple:
 
 def target(points: list, now: float, sunrise: float, sunset: float) -> dict:
     """Brightness and colour at `now`, faded between the points either side of it."""
-    # Keep ordered()'s circular order, do not sort by time: a clamped sun point can
-    # share its minute with a clock point, and the order says which comes first.
-    pts, times = ordered(points), resolve(points, sunrise, sunset)
-    n = len(pts)
-    p0 = p1 = pts[-1]
-    f = 0
-    for i in range(n):
-        t0, j = times[i], (i + 1) % n
-        span = (times[j] - t0) % DAY or (DAY if n == 1 else 0)
-        if (now - t0) % DAY < span:
-            p0, p1, f = pts[i], pts[j], ((now - t0) % DAY) / span
-            break
+    # Sort by minute. A sun point clamped onto a clock point shares its minute: one
+    # carried from the day before (u >= DAY) goes first, one carried back (u < 0)
+    # last, so the later of the two takes over at that minute.
+    timed = sorted(
+        ((u % DAY, -(u // DAY), i, p) for i, (u, p) in enumerate(zip(_unwrapped(points, sunrise, sunset), ordered(points)))),
+        key=lambda x: x[:3],
+    )
+    i = bisect_right([t for t, *_ in timed], now)
+    (t0, *_, p0), (t1, *_, p1) = timed[i - 1], timed[i % len(timed)]
+    span = (t1 - t0) % DAY  # 0: one point, or every point at the same minute
+    f = ((now - t0) % DAY) / span if span else 0
     if p0 is p1 or f == 0:
         f, p1 = 0, p0
 

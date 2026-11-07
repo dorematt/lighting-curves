@@ -127,4 +127,18 @@ for pts_, rise, sett in (
     assert target(edge, 30, rise, sett)["brightness"] == 60  # the clock point from 00:30
     assert target(edge, 31, rise, sett)["brightness"] == 60
 
+# Sun points with different anchors can swap places with the seasons: fade in time order.
+cross = POINTS(
+    [
+        {"time": "00:00", "brightness": 10, "color_temp_kelvin": 2700},
+        {"time": "sunrise+600", "brightness": 90, "color_temp_kelvin": 2700},
+        {"time": "sunset-300", "brightness": 30, "color_temp_kelvin": 2700},
+        {"time": "23:00", "brightness": 10, "color_temp_kelvin": 2700},
+    ]
+)
+assert resolve(cross, 300, 1260) == [0, 960, 900, 1380]  # sunset-300 first in ordered()
+assert target(cross, 900, 300, 1260)["brightness"] == 90  # 15:00 is sunrise+600
+assert target(cross, 960, 300, 1260)["brightness"] == 30  # 16:00 is sunset-300
+assert target(cross, 1380, 300, 1260)["brightness"] == 10
+
 print("ok")
