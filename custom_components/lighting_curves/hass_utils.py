@@ -14,8 +14,8 @@ from homeassistant.util.read_only_dict import ReadOnlyDict
 _LOGGER = logging.getLogger(__name__)
 
 
-def target_entities(hass, data):
-    selected = async_extract_referenced_entity_ids(hass, TargetSelection(data), expand_group=False)
+def target_entities(hass, data, expand_group=False):
+    selected = async_extract_referenced_entity_ids(hass, TargetSelection(data), expand_group=expand_group)
     return selected.referenced | selected.indirectly_referenced
 
 
