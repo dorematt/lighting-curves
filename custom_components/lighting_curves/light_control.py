@@ -113,7 +113,6 @@ def register_curve(curve):
             owner = next((c for c in shared["curves"].values() if entity_id in c.lights()), None)
             if not owner or not state or state.state != "off" or owner.in_preview(entity_id):
                 continue
-            owner.passthrough.pop(entity_id, None)
             owner.resume(entity_id)
             owner.calculate_target()
             rewrites[entity_id] = with_transition(

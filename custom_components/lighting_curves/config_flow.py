@@ -63,13 +63,15 @@ class LightingCurvesOptionsFlow(OptionsFlow):
         errors = {}
         if user_input is not None:
             try:
-                options = set_lights(self.hass, self.config_entry,
-                                    user_input.get("lights", self.config_entry.options.get("lights", [])), user_input)
+                # An emptied selector leaves the key out: that means no lights.
+                options = set_lights(self.hass, self.config_entry, user_input.get("lights", []), user_input)
             except ServiceValidationError:
                 errors["lights"] = "invalid_lights"
             else:
                 return self.async_create_entry(title="", data=options)
-        schema = {vol.Required("lights", default=self.config_entry.options.get("lights", [])):
+        # Suggest only lights that still exist, so a deleted light cannot block a save.
+        current = [e for e in self.config_entry.options.get("lights", []) if self.hass.states.get(e)]
+        schema = {vol.Optional("lights", description={"suggested_value": current}):
                   EntitySelector(EntitySelectorConfig(domain="light", multiple=True))}
         for key in ("interval", "transition", "initial_transition", "manual_control_timeout"):
             schema[vol.Required(key, default=self.config_entry.options.get(key, DEFAULTS[key]))] = NumberSelector(

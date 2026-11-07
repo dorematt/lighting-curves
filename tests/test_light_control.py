@@ -399,8 +399,13 @@ async def main():
     flow.hass, flow.handler = hass, entry.entry_id
     form = await flow.async_step_init()
     assert len(form["data_schema"].schema) == 6
-    result = await flow.async_step_init({**DEFAULTS, "transition": 20})
+    lights_key = next(k for k in form["data_schema"].schema if k == "lights")
+    assert lights_key.description["suggested_value"] == ["light.ct"]  # existing lights only
+    result = await flow.async_step_init({**DEFAULTS, "lights": ["light.ct"], "transition": 20})
     assert result["data"]["transition"] == 20 and result["data"]["lights"] == ["light.ct"]
+    result = await flow.async_step_init({**DEFAULTS})  # selector emptied: the key is left out
+    assert result["data"]["lights"] == []
+    entry.options = {**entry.options, "lights": ["light.ct"]}
     await test_migration_duplicate_ownership()
     await test_setup_cleanup_and_overlap(hass)
     print("ok: capabilities, contexts, batched targets, effect/flash, transitions, tolerances, busy ticks, migration ownership, setup cleanup, manual control, preview rollback/unload, fallback")

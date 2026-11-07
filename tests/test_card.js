@@ -18,15 +18,26 @@ vm.runInContext(fs.readFileSync("custom_components/lighting_curves/frontend/ligh
   card._edit = { kind: "point", index: 0, data: { preview: true } };
   card._form = { data: {} };
   card._previewing = true;
-  card._hass = { callWS: async (message) => {
+  const opened = [{ time: "06:00" }, { time: "20:00" }];
+  card._schedules = [{ entry_id: "one", points: opened, preview: { active: false } }];
+  card._hass = { config: { time_zone: "Australia/Adelaide" }, callWS: async (message) => {
     assert.equal(message.type, "lighting_curves/schedules");
-    return [{ entry_id: "one", points: [{time: "06:00"}, {}], preview }];
+    // Someone else inserted a point earlier in the day while the editor is open.
+    return [{ entry_id: "one", points: [{ time: "05:00" }, { time: "06:00" }, { time: "20:00" }], preview }];
   } };
   await card._refreshPreview();
+  assert.equal(card._schedule.points, opened, "the open editor keeps the points it opened with");
   assert.equal(card._edit.data.preview, true);
-  assert.match(status.textContent, /Preview ends at/);
-  assert.match(card._editorHtml(), /id="preview-status"/);
+  assert.match(status.textContent, /Preview ends at 10:29/, "HA's time zone, not the browser's");
+
+  // A refresh that lands while a preview call is in flight must not untick the box.
   preview = { active: false, expires_at: null };
+  card._previewPending = true;
+  await card._refreshPreview();
+  assert.equal(card._edit.data.preview, true);
+  assert.equal(card._previewing, true);
+  card._previewPending = false;
+  assert.match(card._editorHtml(), /id="preview-status"/);
   await card._refreshPreview();
   assert.equal(card._edit.data.preview, false);
   assert.equal(card._form.data.preview, false);

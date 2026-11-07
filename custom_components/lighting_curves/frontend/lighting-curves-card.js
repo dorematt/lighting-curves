@@ -421,7 +421,12 @@ class LightingCurvesCard extends HTMLElement {
       this._previewing = true;
       const setting = { ...p };
       delete setting.time;
-      await this._call("preview", { setting });
+      this._previewPending = true;
+      try {
+        await this._call("preview", { setting });
+      } finally {
+        this._previewPending = false;
+      }
       await this._refreshPreview();
     } else if (old.preview) this._endPreview();
     try {
@@ -436,15 +441,21 @@ class LightingCurvesCard extends HTMLElement {
   _previewStatus() {
     const p = this._schedule?.preview;
     return p?.active && p.expires_at
-      ? `Preview ends at ${new Date(p.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+      ? `Preview ends at ${new Date(p.expires_at).toLocaleTimeString([], {
+          hour: "2-digit", minute: "2-digit", timeZone: this._hass?.config?.time_zone,
+        })}`
       : "";
   }
 
   async _refreshPreview() {
     try {
-      this._schedules = await this._hass.callWS({ type: `${WS}/schedules` });
+      // Copy only the preview state: an open editor's index refers to the points it opened with.
+      const fresh = await this._hass.callWS({ type: `${WS}/schedules` });
+      const s = this._schedule;
+      const match = s && fresh.find((f) => f.entry_id === s.entry_id);
+      if (match) Object.assign(s, { preview: match.preview, now: match.now });
       this._loadedAt = Date.now();
-      if (!this._schedule?.preview?.active) {
+      if (!this._previewPending && !s?.preview?.active) {
         this._previewing = false;
         if (this._edit?.kind === "point") {
           this._edit.data.preview = false;

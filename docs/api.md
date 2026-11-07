@@ -6,7 +6,7 @@ Each schedule is one HA config entry. Use its `entry_id` as the stable key; its 
 
 ## Actions (services)
 
-HA authentication is required. All three writes require an administrator when called by a user; HA automations/scripts can call them too. The actions appear in Developer Tools → Actions and `/api/services`.
+HA authentication is required. All three writes require an administrator when called by a user. Automations can call them, because they run without a user. A script started from a dashboard by a non-admin user runs as that user, so its write calls fail with `Unauthorized`. The actions appear in Developer Tools → Actions and `/api/services`.
 
 | Action | Fields | Response |
 | --- | --- | --- |
@@ -116,7 +116,7 @@ Set these through the integration's native options flow; actions/WS preserve the
 | `manual_control_mode` | `pause_all` | Manual change pauses brightness and colour; `pause_changed` pauses only changed axes |
 | `manual_control_timeout` | 0 s | Resume after this delay; 0 disables the timer; off/on also resumes |
 
-Saving points/assignments reconciles currently-on lights; it does not turn previously-off lights on. Effect/flash turn-ons pass through and pause both axes. An unavailable interceptor falls back to adaptation after turn-on, which can produce a flash. Another controller (including Adaptive Lighting) on the same lights can conflict; remove those assignments yourself.
+Saving points/assignments reconciles currently-on lights; it does not turn previously-off lights on. An effect or flash turn-on of an off light passes through and pauses both axes until the light next turns off and on (or the manual-control timeout ends). On a light that is already on, an effect counts as a colour change for manual control; a flash does not pause anything. An unavailable interceptor falls back to adaptation after turn-on, which can produce a flash. Another controller (including Adaptive Lighting) on the same lights can conflict; remove those assignments yourself.
 
 ## Errors and diagnostics
 
@@ -133,4 +133,4 @@ Action validation raises translated HA `ServiceValidationError`. WebSocket error
 | Preview without lights | WS `no_lights` |
 | Preview service failure / unavailable participant / failed restoration | WS `unknown_error` with HA error message; rollback remains armed |
 
-Unknown entries are never silently created. An unavailable assigned light is skipped during ordinary adaptation, but failed preview restoration is reported and retried. Get a config-entry diagnostic download from the integration's menu for points, resolved/sun times, current target/options, light state/availability, manual pauses/timeouts, preview expiry and interceptor/fallback status.
+Unknown entries are never silently created. An unavailable assigned light is skipped during ordinary adaptation, but failed preview restoration is reported and retried. The download is not redacted: it holds schedule names (often room names) and light entity IDs, as most HA diagnostics do. Check it before you attach it to a public issue. Get a config-entry diagnostic download from the integration's menu for points, resolved/sun times, current target/options, light state/availability, manual pauses/timeouts, preview expiry and interceptor/fallback status.
