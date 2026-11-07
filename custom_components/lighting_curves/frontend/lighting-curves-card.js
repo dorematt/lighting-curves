@@ -192,6 +192,7 @@ class LightingCurvesCard extends HTMLElement {
     this._loading = true;
     try {
       this._schedules = await this._hass.callWS({ type: `${WS}/schedules` });
+      this._loadedAt = Date.now();
       this._error = null;
     } catch (e) {
       this._error = e.message || String(e);
@@ -348,8 +349,9 @@ class LightingCurvesCard extends HTMLElement {
     const s = this._schedule;
     let p;
     if (index === null) {
-      // The server's local minute from the schedules response, not this browser's clock.
-      const m = Math.round(s.now / 5) * 5;
+      // The server's local minute from the schedules response, not this browser's clock,
+      // plus the time since that response (polling stops while an editor is open).
+      const m = Math.round((s.now + (Date.now() - this._loadedAt) / 60000) / 5) * 5;
       p = { time: hhmm(m % 1440), brightness: s.target?.brightness ?? 50 };
       if (s.target?.rgb_color) p.rgb_color = s.target.rgb_color;
       else p.color_temp_kelvin = s.target?.color_temp_kelvin ?? 2700;

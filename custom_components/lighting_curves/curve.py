@@ -78,20 +78,26 @@ def resolve(points: list, sunrise: float, sunset: float) -> list:
 
     A sun-relative point cannot move past the clock-time points on each side of it,
     so a late summer sunset cannot carry an evening point past a fixed 20:30.
-    Clamping happens on the unwrapped hour, so a point carried past midnight stays
-    at the boundary it crossed instead of jumping to the opposite one.
+    Clamping happens in the reference day's frame, before wrapping to 0-1439, so a
+    point carried past midnight stays at the boundary it crossed. The neighbours
+    are circular: the clock point before the first one is the last, a day earlier.
     """
     pts = ordered(points)
     times = [minute_of_day(p["time"], sunrise, sunset) for p in pts]
     clock = [t if _TIME.match(p["time"])[1] else None for p, t in zip(pts, times)]
+    clocks = [c for c in clock if c is not None]
     for i, p in enumerate(pts):
         if clock[i] is not None:
             continue
         m = _TIME.match(p["time"])
-        t = (sunrise if m[3] == "sunrise" else sunset) + int(m[4])  # unwrapped
-        lo = max((c for c in clock[:i] if c is not None), default=0)
-        hi = min((c for c in clock[i + 1 :] if c is not None), default=DAY)
-        times[i] = min(max(t, lo), hi) % DAY
+        off = int(m[4])
+        ref = (360 if m[3] == "sunrise" else 1080) + off
+        t = (sunrise if m[3] == "sunrise" else sunset) + off - (ref - ref % DAY)  # ordered()'s frame
+        if clocks:
+            lo = max((c for c in clock[:i] if c is not None), default=clocks[-1] - DAY)
+            hi = min((c for c in clock[i + 1 :] if c is not None), default=clocks[0] + DAY)
+            t = min(max(t, lo), hi)
+        times[i] = t % DAY
     return times
 
 

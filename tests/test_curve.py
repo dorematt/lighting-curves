@@ -94,4 +94,25 @@ assert resolve(night, 40, 1080) == [30, 30, 1380]  # sunrise 00:40: clamped at 0
 assert resolve(night, 20, 1080) == [30, 30, 1380]  # sunrise 00:20: still 00:30, was 23:00 before
 assert resolve(night, 100, 1080) == [30, 70, 1380]  # past 00:30 it follows the sun again
 
+# Sun-only schedules have no clock bounds: a late sunset wraps past midnight.
+late = POINTS(
+    [
+        {"time": "sunset+30", "brightness": 30, "color_temp_kelvin": 2700},
+        {"time": "sunset+60", "brightness": 10, "color_temp_kelvin": 2200},
+    ]
+)
+assert resolve(late, SUNRISE, 1430) == [20, 50]
+
+# A sun point past midnight on the reference day keeps its place between clocks.
+after = POINTS(
+    [
+        {"time": "sunset+480", "brightness": 5, "color_temp_kelvin": 2200},
+        {"time": "06:00", "brightness": 60, "color_temp_kelvin": 4000},
+        {"time": "22:00", "brightness": 20, "color_temp_kelvin": 2700},
+    ]
+)
+assert resolve(after, SUNRISE, 1080) == [120, 360, 1320]
+assert resolve(after, SUNRISE, 1260) == [300, 360, 1320]  # sunset 21:00: 05:00
+assert resolve(after, SUNRISE, 1380) == [360, 360, 1320]  # would be 07:00: clamped at 06:00
+
 print("ok")
