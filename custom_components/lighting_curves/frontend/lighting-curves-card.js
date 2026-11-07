@@ -48,7 +48,7 @@ function toForm(p) {
 function fromForm(d) {
   const off = Math.round(Number(d.offset) || 0);
   const p = {
-    time: d.anchor === "clock" ? d.time.slice(0, 5) : `${d.anchor}${off < 0 ? "-" : "+"}${Math.abs(off)}`,
+    time: d.anchor === "clock" ? (d.time ? d.time.slice(0, 5) : "") : `${d.anchor}${off < 0 ? "-" : "+"}${Math.abs(off)}`,
     brightness: Math.round(d.brightness),
   };
   if (d.colour === "rgb") p.rgb_color = d.rgb_color.map(Math.round);
@@ -323,7 +323,7 @@ class LightingCurvesCard extends HTMLElement {
     const title = { lights: "Lights", new: "New schedule", point: e.index === null ? "New point" : "Edit point" }[e.kind];
     const help = {
       lights: `${
-        this._schedule.al_available
+        this._schedule?.al_available
           ? ""
           : `<p class="warn">Requires the Adaptive Lighting integration to be installed. <a href="${AL_LINK}" target="_blank" rel="noreferrer">Get Adaptive Lighting</a></p>`
       }<p><b>On</b> – Will use the Adaptive Lighting integration to keep the light following the curve over time.<br>
@@ -348,8 +348,8 @@ class LightingCurvesCard extends HTMLElement {
     const s = this._schedule;
     let p;
     if (index === null) {
-      const n = new Date();
-      const m = Math.round((n.getHours() * 60 + n.getMinutes()) / 5) * 5;
+      // The server's local minute from the schedules response, not this browser's clock.
+      const m = Math.round(s.now / 5) * 5;
       p = { time: hhmm(m % 1440), brightness: s.target?.brightness ?? 50 };
       if (s.target?.rgb_color) p.rgb_color = s.target.rgb_color;
       else p.color_temp_kelvin = s.target?.color_temp_kelvin ?? 2700;
@@ -383,7 +383,10 @@ class LightingCurvesCard extends HTMLElement {
       if (e.kind === "lights") {
         await this._hass.callWS({ type: `${WS}/set_lights`, entry_id: this._current, lights: e.data.lights || [], adaptive: !!e.data.adaptive });
       } else {
-        if (!e.data.name?.trim()) return;
+        if (!e.data.name?.trim()) {
+          this._toast("A schedule needs a name");
+          return;
+        }
         this._current = (await this._hass.callWS({ type: `${WS}/create`, name: e.data.name.trim() })).entry_id;
       }
     } catch (err) {
@@ -396,8 +399,9 @@ class LightingCurvesCard extends HTMLElement {
   }
 
   _draftPoints() {
-    const pts = [...this._schedule.points];
     const p = fromForm(this._edit.data);
+    if (!p.time) throw new Error("The point needs a time");
+    const pts = [...this._schedule.points];
     if (this._edit.index === null) pts.push(p);
     else pts[this._edit.index] = p;
     return pts;
@@ -505,9 +509,17 @@ class LightingCurvesCard extends HTMLElement {
     );
     root.querySelector("[data-new]")?.addEventListener("click", () => this._openOther("new"));
     root.querySelector("[data-cancel]")?.addEventListener("click", () => this._close());
-    root.querySelector("[data-save]")?.addEventListener("click", () =>
-      this._edit.kind === "point" ? this._save(this._draftPoints()) : this._saveOther()
-    );
+    root.querySelector("[data-save]")?.addEventListener("click", () => {
+      if (this._edit.kind !== "point") return this._saveOther();
+      let pts;
+      try {
+        pts = this._draftPoints();
+      } catch (e) {
+        this._toast(e.message || String(e));
+        return;
+      }
+      this._save(pts);
+    });
     root.querySelectorAll("[data-delete]").forEach((b) =>
       b.addEventListener("click", () => this._save(this._schedule.points.filter((_, i) => i !== this._edit.index)))
     );

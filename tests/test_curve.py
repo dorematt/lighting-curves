@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, ".")
 from custom_components.lighting_curves.config_flow import DEFAULT_POINTS
-from custom_components.lighting_curves.curve import POINTS, minute_of_day, target
+from custom_components.lighting_curves.curve import POINTS, minute_of_day, resolve, target
 
 # After the HA imports: HA swaps voluptuous for a compatible module on import.
 import voluptuous as vol  # noqa: E402
@@ -61,5 +61,37 @@ for bad in (
     except vol.Invalid:
         continue
     raise AssertionError(f"accepted {bad}")
+
+# A13: clock times normalise to HH:MM (6:00 -> 06:00) and duplicates are rejected,
+# including the same sun anchor and offset written differently.
+assert POINTS([{"time": "6:00", "brightness": 50, "color_temp_kelvin": 2700}])[0]["time"] == "06:00"
+for dup in (
+    [
+        {"time": "06:00", "brightness": 50, "color_temp_kelvin": 2700},
+        {"time": "6:00", "brightness": 60, "color_temp_kelvin": 3500},
+    ],
+    [
+        {"time": "sunrise+30", "brightness": 50, "color_temp_kelvin": 2700},
+        {"time": "sunrise+030", "brightness": 60, "color_temp_kelvin": 3500},
+    ],
+):
+    try:
+        POINTS(dup)
+    except vol.Invalid:
+        continue
+    raise AssertionError(f"accepted duplicate {dup}")
+
+# A5: a sun time carried past midnight clamps at the boundary it crossed (00:30),
+# not the opposite one (23:00).
+night = POINTS(
+    [
+        {"time": "00:30", "brightness": 10, "color_temp_kelvin": 2700},
+        {"time": "sunrise-30", "brightness": 30, "color_temp_kelvin": 3500},
+        {"time": "23:00", "brightness": 20, "color_temp_kelvin": 2700},
+    ]
+)
+assert resolve(night, 40, 1080) == [30, 30, 1380]  # sunrise 00:40: clamped at 00:30
+assert resolve(night, 20, 1080) == [30, 30, 1380]  # sunrise 00:20: still 00:30, was 23:00 before
+assert resolve(night, 100, 1080) == [30, 70, 1380]  # past 00:30 it follows the sun again
 
 print("ok")

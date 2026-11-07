@@ -16,6 +16,7 @@
   "documentation": "https://github.com/dorematt/lighting-curves",
   "integration_type": "service",
   "iot_class": "calculated",
+  "issue_tracker": "https://github.com/dorematt/lighting-curves/issues",
   "requirements": [],
   "version": "0.2.1"
 }

@@ -22,8 +22,11 @@ _TIME = re.compile(r"^(?:([01]?\d|2[0-3]):([0-5]\d)|(sunrise|sunset)([+-]\d{1,3}
 
 
 def _valid_time(value):
-    if not isinstance(value, str) or not _TIME.match(value):
+    m = _TIME.match(value) if isinstance(value, str) else None
+    if not m:
         raise vol.Invalid(f"expected HH:MM, sunrise±MIN or sunset±MIN, got {value!r}")
+    if m[1]:
+        return f"{int(m[1]):02d}:{m[2]}"  # 6:00 -> 06:00, so duplicates compare equal
     return value
 
 
@@ -38,9 +41,23 @@ _SETTING = {
     vol.Optional("color_temp_kelvin"): vol.All(int, vol.Range(1000, 10000)),
     vol.Optional("rgb_color"): vol.All([vol.All(int, vol.Range(0, 255))], vol.Length(min=3, max=3)),
 }
+
+
+def _unique_times(points):
+    """Two points cannot share an instant, fixed or sun-relative."""
+    seen = []
+    for p in points:
+        m = _TIME.match(p["time"])
+        key = (m[3], int(m[4])) if m[3] else p["time"]
+        if key in seen:
+            raise vol.Invalid(f"two points at {p['time']}: merge them into one")
+        seen.append(key)
+    return points
+
+
 SETTING = vol.All(vol.Schema(_SETTING), _one_colour)
 POINT = vol.All(vol.Schema({vol.Required("time"): _valid_time, **_SETTING}), _one_colour)
-POINTS = vol.All([POINT], vol.Length(min=1))
+POINTS = vol.All([POINT], vol.Length(min=1), _unique_times)
 
 
 def minute_of_day(time: str, sunrise: float, sunset: float) -> float:
@@ -61,15 +78,20 @@ def resolve(points: list, sunrise: float, sunset: float) -> list:
 
     A sun-relative point cannot move past the clock-time points on each side of it,
     so a late summer sunset cannot carry an evening point past a fixed 20:30.
+    Clamping happens on the unwrapped hour, so a point carried past midnight stays
+    at the boundary it crossed instead of jumping to the opposite one.
     """
     pts = ordered(points)
     times = [minute_of_day(p["time"], sunrise, sunset) for p in pts]
     clock = [t if _TIME.match(p["time"])[1] else None for p, t in zip(pts, times)]
-    for i, t in enumerate(times):
-        if clock[i] is None:
-            lo = max((c for c in clock[:i] if c is not None), default=0)
-            hi = min((c for c in clock[i + 1 :] if c is not None), default=DAY)
-            times[i] = min(max(t, lo), hi)
+    for i, p in enumerate(pts):
+        if clock[i] is not None:
+            continue
+        m = _TIME.match(p["time"])
+        t = (sunrise if m[3] == "sunrise" else sunset) + int(m[4])  # unwrapped
+        lo = max((c for c in clock[:i] if c is not None), default=0)
+        hi = min((c for c in clock[i + 1 :] if c is not None), default=DAY)
+        times[i] = min(max(t, lo), hi) % DAY
     return times
 
 

@@ -8,7 +8,8 @@
       }
     },
     "error": {
-      "not_main_switch": "Pick the main Adaptive Lighting switch, not its sleep mode or adapt switches."
+      "not_main_switch": "Pick the main Adaptive Lighting switch, not its sleep mode or adapt switches.",
+      "empty_name": "Give the schedule a name."
     },
     "abort": {
       "already_configured": "A schedule with this name or switch already exists."

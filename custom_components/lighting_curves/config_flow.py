@@ -27,12 +27,15 @@ class LightingCurvesConfigFlow(ConfigFlow, domain=DOMAIN):
         errors = {}
         if user_input is not None:
             name, switch = user_input["name"].strip(), user_input.get("switch")
-            state = self.hass.states.get(switch) if switch else None
-            # Only the main switch of an Adaptive Lighting entry carries manual_control.
-            if switch and (state is None or "manual_control" not in state.attributes):
-                errors["switch"] = "not_main_switch"
+            if not name:
+                errors["name"] = "empty_name"
             else:
-                await self.async_set_unique_id(switch or name.lower(), raise_on_progress=False)
+                state = self.hass.states.get(switch) if switch else None
+                # Only the main switch of an Adaptive Lighting entry carries manual_control.
+                if switch and (state is None or "manual_control" not in state.attributes):
+                    errors["switch"] = "not_main_switch"
+                else:
+                    await self.async_set_unique_id(switch or name.lower(), raise_on_progress=False)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
                     title=name,

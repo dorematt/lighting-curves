@@ -155,11 +155,15 @@ async def ws_preview_end(hass, connection, msg):
 @websocket_api.async_response
 async def ws_create(hass, connection, msg):
     """A new schedule with no lights: a sensor until lights are set."""
+    name = msg["name"].strip()
+    if not name:
+        connection.send_error(msg["id"], "empty_name", "A schedule needs a name")
+        return
     result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}, data={"name": msg["name"]}
+        DOMAIN, context={"source": SOURCE_USER}, data={"name": name}
     )
     if result["type"] != "create_entry":
-        connection.send_error(msg["id"], "exists", f"A schedule called {msg['name']} already exists")
+        connection.send_error(msg["id"], "exists", f"A schedule called {name} already exists")
         return
     connection.send_result(msg["id"], {"entry_id": result["result"].entry_id})
 
