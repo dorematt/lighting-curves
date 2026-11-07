@@ -12,9 +12,12 @@ import logging
 from homeassistant.core import Context
 from homeassistant.util import color
 
-from .hass_utils import setup_service_call_interceptor, target_entities
+from .hass_utils import off_targets, setup_service_call_interceptor, target_entities
 
-CLOSING_GRACE = 5  # s the curve leaves a floored light alone while its turn-off runs
+# The curve leaves a floored light alone until its turn-off finishes, then for this long while
+# the device reports off. CLOSING_LIMIT caps it if the hook never hears back.
+CLOSING_GRACE = 5
+CLOSING_LIMIT = 60
 
 DOMAIN = "lighting_curves"
 DEFAULTS = {
@@ -111,14 +114,13 @@ def register_curve(curve):
         return next((c for c in shared["curves"].values() if entity_id in c.lights()), None)
 
     async def floor_before_off(call, data):
-        """Separate turn-on: dim curve-active lights to the floor so the next plain turn-on starts there."""
-        # Expand "all" and old-style groups too: HA resolves them after this hook. Light groups
-        # forward the turn-off to their members, and those calls pass through here again.
-        if data.get("entity_id") == "all":
-            entities = hass.states.async_entity_ids("light")
-        else:
-            entities = target_entities(hass, data, expand_group=True)
-        for entity_id in sorted(e for e in entities if e.startswith("light.")):
+        """Separate turn-on: dim curve-active lights to the floor so the next plain turn-on starts there.
+
+        Returns a callback for when the turn-off finishes. Light groups forward the turn-off to
+        their members, and those calls pass through here again.
+        """
+        floored = []
+        for entity_id in await off_targets(hass, call, data):
             owner, state = owner_of(entity_id), hass.states.get(entity_id)
             level = owner and round(owner.option("turn_on_floor") * 255 / 100)
             if (not owner or not owner.option("separate_turn_on") or not state or state.state != "on"
@@ -129,7 +131,8 @@ def register_curve(curve):
             try:
                 # Under the apply lock, and closing, so an interval update cannot raise it again.
                 async with owner._apply_lock:
-                    owner.closing[entity_id] = hass.loop.time() + CLOSING_GRACE
+                    owner.closing[entity_id] = hass.loop.time() + CLOSING_LIMIT
+                    floored.append((owner, entity_id))
                     await hass.services.async_call("light", "turn_on", {
                         "entity_id": entity_id, "brightness": level,
                     }, blocking=True, context=own_context(call.context))
@@ -137,13 +140,23 @@ def register_curve(curve):
                 # The turn-off still goes ahead; the next turn-on starts at the old level.
                 _LOGGER.warning("Could not dim %s to its floor before turn-off: %r", entity_id, err)
 
+        def finished():
+            deadline = hass.loop.time() + CLOSING_GRACE
+            for owner, entity_id in floored:
+                if entity_id in owner.closing:  # Not yet reported off.
+                    owner.closing[entity_id] = deadline
+
+        return finished if floored else None
+
     async def intercept(call, data):
         if is_ours(call.context):
-            return
-        if call.service != "turn_on":
-            await floor_before_off(call, data)
-            if call.service == "turn_off":
-                return
+            return None
+        finished = await floor_before_off(call, data) if call.service != "turn_on" else None
+        if call.service != "turn_off":
+            await rewrite_turn_on(call, data)
+        return finished
+
+    async def rewrite_turn_on(call, data):
         original = dict(data.get("params", {}))
         if "effect" in original or "flash" in original:
             return

@@ -113,7 +113,7 @@ async def test_caller_transition(hass, service_calls):
     assert len(service_calls) == 1 and service_calls[0][2]["transition"] == 600
 
 
-async def test_separate_turn_on(hass, calls, service_calls, curve):
+async def test_separate_turn_on(hass, calls, service_calls, curve, fail):
     curve.entry.options["separate_turn_on"] = True
     try:
         hass.states.async_set("light.rgb", "off", RGB)
@@ -151,12 +151,49 @@ async def test_separate_turn_on(hass, calls, service_calls, curve):
         # "all" is expanded; the dim keeps the caller's user for HA's permission check.
         calls.clear()
         service_calls.clear()
+        user = SimpleNamespace(is_admin=True, permissions=SimpleNamespace(check_entity=lambda e, _: e != "light.ct"))
+        hass.auth = SimpleNamespace(async_get_user=AsyncMock(return_value=user))
         await hass.services.async_call("light", "turn_off", {"entity_id": "all"}, blocking=True,
                                        context=Context(user_id="abc"))
         await hass.async_block_till_done()
         dims = [c for c in service_calls if c[1] == "turn_on"]
         assert sorted(c[0][0] for c in dims) == ["light.ct", "light.rgb"] and all(c[2] == {"brightness": 13} for c in dims)
         assert all(c[3].user_id == "abc" for c in dims)
+        # A non-admin: "all" dims only lights they may control; a target with a denied light,
+        # which HA rejects whole, dims nothing.
+        user.is_admin = False
+        for target, dimmed in (({"entity_id": "all"}, ["light.rgb"]), ({"entity_id": ["light.ct", "light.rgb"]}, [])):
+            for entity in ("light.ct", "light.rgb"):
+                hass.states.async_set(entity, "on", {**hass.states.get(entity).attributes, "brightness": 153})
+            await hass.async_block_till_done()
+            service_calls.clear()
+            await hass.services.async_call("light", "turn_off", target, blocking=True, context=Context(user_id="abc"))
+            await hass.async_block_till_done()
+            assert [c[0][0] for c in service_calls if c[1] == "turn_on"] == dimmed, service_calls
+        user.is_admin = True
+        from homeassistant.helpers import target as target_helpers
+        if hasattr(target_helpers, "async_extract_excluded_entity_ids"):  # exclude blocks: HA 2026.11+
+            for entity in ("light.ct", "light.rgb"):
+                hass.states.async_set(entity, "on", {**hass.states.get(entity).attributes, "brightness": 153})
+            await hass.async_block_till_done()
+            service_calls.clear()
+            await hass.services.async_call("light", "turn_off", {"entity_id": "all", "exclude": {"entity_id": ["light.ct"]}},
+                                           blocking=True)
+            assert [c[0][0] for c in service_calls if c[1] == "turn_on"] == ["light.rgb"], service_calls
+        # The curve leaves a floored light alone until its turn-off finishes, then for the grace time.
+        hass.states.async_set("light.rgb", "on", {**RGB, "brightness": 153})
+        await hass.async_block_till_done()
+        fail.add("light.rgb")
+        try:
+            await hass.services.async_call("light", "turn_off", {"entity_id": "light.rgb"}, blocking=True)
+        except HomeAssistantError:
+            pass
+        fail.clear()
+        assert 0 < curve.closing["light.rgb"] - hass.loop.time() <= 5
+        curve.closing.clear()
+        hass.states.async_set("light.rgb", "off", RGB)
+        hass.states.async_set("light.ct", "off", CT)
+        await hass.async_block_till_done()
         # An interval update between the dim and the turn-off does not raise the light again.
         await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb"}, blocking=True)
         await hass.async_block_till_done()
@@ -280,7 +317,7 @@ async def main():
     fail = set()
 
     def schema(data):
-        targets = {"entity_id", "area_id", "device_id"}
+        targets = {"entity_id", "area_id", "device_id", "exclude"}
         return {**{k: v for k, v in data.items() if k in targets},
                 "params": {k: v for k, v in data.items() if k not in targets}}
 
@@ -324,7 +361,7 @@ async def main():
     await test_area_targets_batched(hass, service_calls)
     await test_effect_flash_pass_through(hass, service_calls, curve)
     await test_caller_transition(hass, service_calls)
-    await test_separate_turn_on(hass, calls, service_calls, curve)
+    await test_separate_turn_on(hass, calls, service_calls, curve, fail)
     await test_busy_tick_skipped(curve)
     hass.states.async_set("light.rgb", "off", RGB)
     await hass.async_block_till_done()
