@@ -29,6 +29,9 @@ vm.runInContext(fs.readFileSync("custom_components/lighting_curves/frontend/ligh
   assert.equal(card._schedule.points, opened, "the open editor keeps the points it opened with");
   assert.equal(card._edit.data.preview, true);
   assert.match(status.textContent, /Preview ends at 10:29/, "HA's time zone, not the browser's");
+  card._hass.config.time_zone = "Not/AZone";
+  assert.match(card._previewStatus(), /Preview ends at \d\d:\d\d/, "an unknown zone does not throw");
+  card._hass.config.time_zone = "Australia/Adelaide";
 
   // A refresh that lands while a preview call is in flight must not untick the box.
   preview = { active: false, expires_at: null };

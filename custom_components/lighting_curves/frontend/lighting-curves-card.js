@@ -440,11 +440,17 @@ class LightingCurvesCard extends HTMLElement {
 
   _previewStatus() {
     const p = this._schedule?.preview;
-    return p?.active && p.expires_at
-      ? `Preview ends at ${new Date(p.expires_at).toLocaleTimeString([], {
-          hour: "2-digit", minute: "2-digit", timeZone: this._hass?.config?.time_zone,
-        })}`
-      : "";
+    if (!p?.active || !p.expires_at) return "";
+    // The user's profile picks the server's or the browser's time zone, as elsewhere in HA.
+    const zone = this._hass?.locale?.time_zone === "local" ? undefined : this._hass?.config?.time_zone;
+    const at = new Date(p.expires_at);
+    let time;
+    try {
+      time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: zone });
+    } catch (_) {
+      time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); // unknown zone name
+    }
+    return `Preview ends at ${time}`;
   }
 
   async _refreshPreview() {
