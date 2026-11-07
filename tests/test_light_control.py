@@ -297,6 +297,7 @@ async def main():
     await curve.async_preview(RED)
     await hass.async_block_till_done()
     assert curve.preview == {"light.ct": True, "light.rgb": False} and curve._preview_timeout
+    assert curve.preview_state()["active"] and curve.preview_state()["expires_at"]
     entry.options["lights"] = ["light.rgb", "light.other"]  # originally-on light removed; other added
     calls.clear()
     await curve.async_update(force=True)
@@ -304,6 +305,7 @@ async def main():
     await curve.async_end_preview()
     await hass.async_block_till_done()
     assert hass.states.get("light.ct").attributes["brightness"] == 153
+    assert curve.preview_state() == {"active": False, "expires_at": None}
     assert hass.states.get("light.rgb").state == "off" and hass.states.get("light.other").state == "off"
     assert not any(entity == "light.other" for entity, _, _ in calls)
 
@@ -334,6 +336,20 @@ async def main():
     await hass.async_block_till_done()
     assert hass.states.get("light.rgb").attributes["brightness"] == 153
     assert calls[-1][2]["transition"] == 1
+    # M1: effect/flash passthrough must also work without an installed interceptor.
+    await test_effect_flash_pass_through(hass, service_calls, curve)
+    # M2: an effect call that left the light off must not poison a later plain
+    # turn-on from the same script context, even when no control fields are sent.
+    hass.states.async_set("light.rgb", "off", RGB)
+    await hass.async_block_till_done()
+    context = Context()
+    curve._service_called(Event("call_service", {"domain": "light", "service": "turn_on",
+        "service_data": {"entity_id": "light.rgb", "effect": "rainbow"}}, context=context))
+    assert curve.passthrough["light.rgb"] == context.id
+    await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb"}, blocking=True, context=context)
+    await hass.async_block_till_done()
+    assert "light.rgb" not in curve.manual and "light.rgb" not in curve.passthrough
+    assert hass.states.get("light.rgb").attributes["brightness"] == 153
     # Registry renames/removals preserve options and update preview participant IDs.
     def update(updated, **kwargs):
         for key, value in kwargs.items():
@@ -378,10 +394,11 @@ async def main():
 
     # The options form uses native selectors and preserves points/lights on save.
     hass.config_entries.async_get_known_entry = lambda _: entry
+    hass.config_entries.async_entries = lambda _: [entry]
     flow = LightingCurvesOptionsFlow()
     flow.hass, flow.handler = hass, entry.entry_id
     form = await flow.async_step_init()
-    assert len(form["data_schema"].schema) == 5
+    assert len(form["data_schema"].schema) == 6
     result = await flow.async_step_init({**DEFAULTS, "transition": 20})
     assert result["data"]["transition"] == 20 and result["data"]["lights"] == ["light.ct"]
     await test_migration_duplicate_ownership()

@@ -1,0 +1,38 @@
+create_schedule:
+  fields:
+    name:
+      required: true
+      example: Kitchen
+      selector:
+        text:
+set_points:
+  fields:
+    entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: lighting_curves
+    points:
+      required: true
+      example: [{time: '06:00', brightness: 80, color_temp_kelvin: 4000}]
+      selector:
+        object:
+set_lights:
+  fields:
+    entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: lighting_curves
+    lights:
+      required: true
+      selector:
+        entity:
+          domain: light
+          multiple: true
+get_schedules:
+  fields:
+    entry_id:
+      selector:
+        config_entry:
+          integration: lighting_curves

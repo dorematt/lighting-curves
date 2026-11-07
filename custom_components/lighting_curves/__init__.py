@@ -67,6 +67,7 @@ class Curve:
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass, self.entry = hass, entry
         self.target = None
+        self.preview_expires_at = None
         self.preview = None  # Original participants: entity_id -> was on.
         self.intercepted = {}
         self.passthrough = {}  # entity_id -> context of an effect/flash turn-on
@@ -86,6 +87,9 @@ class Curve:
 
     def lights(self) -> list[str]:
         return list(self.entry.options.get("lights", []))
+
+    def preview_state(self):
+        return {"active": self.preview is not None, "expires_at": self.preview_expires_at}
 
     def in_preview(self, entity_id):
         curves = self.hass.data.get(DOMAIN, {}).get("curves", {self.entry.entry_id: self})
@@ -169,11 +173,16 @@ class Curve:
             axes.add("brightness")
         if COLOR_KEYS.intersection(params) or "profile" in params:
             axes.add("color")
-        if not axes:
-            return
         for entity_id in target_entities(self.hass, service_data):
             state = self.hass.states.get(entity_id)
-            if entity_id not in self.lights() or not state or state.state != STATE_ON or self.in_preview(entity_id):
+            if entity_id not in self.lights():
+                continue
+            if "effect" in params or "flash" in params:
+                if state and state.state == "off":
+                    self.passthrough[entity_id] = event.context.id
+            else:
+                self.passthrough.pop(entity_id, None)
+            if not axes or not state or state.state != STATE_ON or self.in_preview(entity_id):
                 continue
             self.manual.setdefault(entity_id, set()).update(
                 {"brightness", "color"} if self.option("manual_control_mode") == "pause_all" else axes
@@ -255,6 +264,7 @@ class Curve:
     def async_restart_preview_timeout(self):
         if self._preview_timeout:
             self._preview_timeout()
+        self.preview_expires_at = (dt_util.utcnow() + timedelta(seconds=PREVIEW_TIMEOUT)).isoformat()
         self._preview_timeout = async_call_later(self.hass, PREVIEW_TIMEOUT, self._async_preview_timed_out)
 
     async def _async_preview_timed_out(self, _now):
@@ -302,6 +312,7 @@ class Curve:
                 self.async_restart_preview_timeout()
                 raise HomeAssistantError("Some preview lights could not be restored; rollback will retry")
             self.preview = None
+            self.preview_expires_at = None
 
     async def _async_minute(self, _now):
         await self.async_update()
@@ -346,8 +357,9 @@ async def async_migrate_entry(hass, entry):
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    from . import websocket
+    from . import services, websocket
 
+    services.async_setup(hass)
     websocket.async_setup(hass)
     await websocket.async_register_card(hass)
     return True
