@@ -22,6 +22,7 @@ async def main():
             setattr(entry, key, value)
 
     hass = SimpleNamespace(config_entries=SimpleNamespace(
+        async_entries=lambda domain: [],
         async_get_entry=lambda entry_id: al if entry_id == "al" else None,
         async_update_entry=update,
     ))
@@ -29,17 +30,17 @@ async def main():
                                if entity_id == "switch.adaptive_lighting_main" else None)
     with patch("custom_components.lighting_curves.er.async_get", return_value=registry):
         for lights in (None, []):
-            entry = SimpleNamespace(version=1, title="Room", data={"switch": "switch.adaptive_lighting_main"},
+            entry = SimpleNamespace(entry_id="room", version=1, title="Room", data={"switch": "switch.adaptive_lighting_main"},
                                     options={"points": deepcopy(points), **({"lights": lights} if lights is not None else {})})
             assert await async_migrate_entry(hass, entry)
             assert entry.version == 2 and entry.data == {}
             assert entry.options["lights"] == ["light.one", "light.two"]
             assert entry.options["points"] == points and entry.options["interval"] == 90
             assert al.options == original
-        missing = SimpleNamespace(version=1, title="Missing AL", data={"switch": "switch.missing"}, options={"points": points})
+        missing = SimpleNamespace(entry_id="missing", version=1, title="Missing AL", data={"switch": "switch.missing"}, options={"points": points})
         assert await async_migrate_entry(hass, missing)
         assert missing.options["lights"] == [] and missing.options["points"] == points and missing.data == {}
-        direct = SimpleNamespace(version=1, title="Direct", data={}, options={"points": points, "lights": ["light.direct"]})
+        direct = SimpleNamespace(entry_id="direct", version=1, title="Direct", data={}, options={"points": points, "lights": ["light.direct"]})
         assert await async_migrate_entry(hass, direct)
         assert direct.options["lights"] == ["light.direct"] and direct.options["points"] == points
         count = len(updates)

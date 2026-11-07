@@ -8,14 +8,15 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, ".")
 from homeassistant.core import Context, Event, HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError
-from custom_components.lighting_curves import Curve, async_unload_entry
+from custom_components.lighting_curves import Curve, async_migrate_entry, async_setup_entry, async_unload_entry
 from custom_components.lighting_curves.config_flow import LightingCurvesOptionsFlow
-from custom_components.lighting_curves.light_control import DEFAULTS, is_ours, light_data, own_context
+from custom_components.lighting_curves.light_control import DEFAULTS, is_ours, light_data, matches, own_context, with_transition
 from homeassistant.util.ulid import ulid_to_bytes
 
-context = own_context()
-assert len(ulid_to_bytes(context.id)) == 16 and is_ours(context)
-assert is_ours(Context(parent_id=context.id)) and not is_ours(Context())
+def test_context_ownership():
+    context = own_context()
+    assert len(ulid_to_bytes(context.id)) == 16 and is_ours(context)
+    assert not is_ours(Context(parent_id=context.id)) and not is_ours(Context())
 
 CT = {"supported_color_modes": ["color_temp"], "min_color_temp_kelvin": 2200, "max_color_temp_kelvin": 5000,
       "supported_features": 32}
@@ -33,25 +34,195 @@ assert light_data(State("light.dim", "on", {"supported_color_modes": ["brightnes
 assert light_data(State("light.ct", "on", CT), WHITE, {"brightness", "color"}) == {}
 
 
+def test_round_trip_tolerances():
+    for actual, expected in ((2702, 2700), (2197, 2200)):
+        assert matches(State("light.ct", "on", {"color_temp_kelvin": actual}), {"color_temp_kelvin": expected})
+    assert matches(State("light.rgb", "on", {"rgb_color": [252, 3, 1], "brightness": 152}),
+                   {"rgb_color": [255, 0, 0], "brightness": 153})
+    assert not matches(State("light.ct", "on", {"color_temp_kelvin": 2800}), {"color_temp_kelvin": 2700})
+    assert not matches(State("light.rgb", "on", {"rgb_color": [251, 0, 0]}), {"rgb_color": [255, 0, 0]})
+    assert not matches(State("light.rgb", "on", {"brightness": 151}), {"brightness": 153})
+    assert with_transition({}, 600) == {"transition": 600}
+
+
+async def test_remaining_group_context(hass, calls, service_calls):
+    for entity in ("light.ct", "light.rgb"):
+        hass.states.async_set(entity, "off", hass.states.get(entity).attributes)
+    hass.states.async_set("light.group", "off", {"entity_id": ["light.rgb"]})
+    await hass.async_block_till_done()
+    calls.clear()
+    service_calls.clear()
+    parent = Context()
+    await hass.services.async_call("light", "turn_on", {
+        "entity_id": ["light.ct", "light.group"], "brightness": 12,
+    }, blocking=True, context=parent)
+    await hass.async_block_till_done()
+    group_context = next(context for entities, _, _, context in service_calls if entities == ["light.group"])
+    assert group_context.parent_id == parent.id and not is_ours(group_context)
+    rgb_calls = [data for entity, _, data in calls if entity == "light.rgb"]
+    assert len(rgb_calls) == 1 and rgb_calls[0]["brightness"] == 153 and "rgb_color" in rgb_calls[0]
+
+
+async def test_area_targets_batched(hass, service_calls):
+    hass.states.async_set("light.rgb", "off", RGB)
+    hass.states.async_set("light.other_two", "off", CT)
+    hass.states.async_set("sensor.room", "12")
+    await hass.async_block_till_done()
+    service_calls.clear()
+    from custom_components.lighting_curves.hass_utils import target_entities
+
+    def area_targets(hass, data):
+        if data.get("area_id") == "room":
+            return {"sensor.room", "light.rgb", "light.other", "light.other_two"}
+        return target_entities(hass, data)
+
+    with patch("custom_components.lighting_curves.light_control.target_entities", side_effect=area_targets), \
+         patch("custom_components.lighting_curves.target_entities", side_effect=area_targets):
+        await hass.services.async_call("light", "turn_on", {"area_id": "room", "brightness": 12}, blocking=True)
+        await hass.async_block_till_done()
+    assert len(service_calls) == 2
+    assert any(entities == ["light.other", "light.other_two"] and params == {"brightness": 12}
+               for entities, _, params, _ in service_calls)
+    assert all(entity.startswith("light.") for entities, _, _, _ in service_calls for entity in entities)
+
+
+async def test_effect_flash_pass_through(hass, service_calls):
+    for params in ({"effect": "colorloop", "brightness": 12}, {"flash": "short", "brightness": 12}):
+        hass.states.async_set("light.rgb", "off", RGB)
+        await hass.async_block_till_done()
+        service_calls.clear()
+        context = Context()
+        await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb", **params},
+                                       blocking=True, context=context)
+        await hass.async_block_till_done()
+        assert service_calls[0] == (["light.rgb"], "turn_on", params, context)
+
+
+async def test_caller_transition(hass, service_calls):
+    hass.states.async_set("light.rgb", "off", RGB)
+    await hass.async_block_till_done()
+    service_calls.clear()
+    await hass.services.async_call("light", "turn_on", {"entity_id": "light.rgb", "transition": 600}, blocking=True)
+    await hass.async_block_till_done()
+    assert len(service_calls) == 1 and service_calls[0][2]["transition"] == 600
+
+
+async def test_busy_tick_skipped(curve):
+    with patch.object(curve, "async_update", new_callable=AsyncMock) as update:
+        async with curve._apply_lock:
+            await asyncio.wait_for(curve._async_tick(None), timeout=1)
+        update.assert_not_awaited()
+        await curve._async_tick(None)
+        update.assert_awaited_once_with(force=True)
+
+
+async def test_migration_duplicate_ownership():
+    al = SimpleNamespace(domain="adaptive_lighting", options={"lights": ["light.shared", "light.new"]})
+    al_second = SimpleNamespace(domain="adaptive_lighting", options={"lights": ["light.new", "light.second"]})
+    direct = SimpleNamespace(entry_id="direct", version=1, title="Direct", data={}, options={
+        "points": [], "lights": ["light.shared"],
+    })
+    first = SimpleNamespace(entry_id="first", version=1, title="First", data={"switch": "switch.al"}, options={"points": []})
+    second = SimpleNamespace(entry_id="second", version=1, title="Second", data={"switch": "switch.al_second"}, options={"points": []})
+    original = deepcopy(al.options)
+    original_second = deepcopy(al_second.options)
+
+    def update(entry, **changes):
+        assert entry is not al and entry is not al_second
+        for key, value in changes.items():
+            setattr(entry, key, value)
+
+    hass = SimpleNamespace(config_entries=SimpleNamespace(
+        async_entries=lambda domain: [direct, first, second],
+        async_get_entry=lambda key: al if key == "al" else al_second, async_update_entry=update,
+    ))
+    registry = SimpleNamespace(async_get=lambda switch: SimpleNamespace(config_entry_id=switch.removeprefix("switch.")))
+    with patch("custom_components.lighting_curves.er.async_get", return_value=registry), \
+         patch("custom_components.lighting_curves._LOGGER.warning") as warning:
+        assert await async_migrate_entry(hass, first)
+        assert first.options["lights"] == ["light.new"]
+        assert await async_migrate_entry(hass, second)
+        assert second.options["lights"] == ["light.second"]
+        assert await async_migrate_entry(hass, direct)
+        assert direct.options["lights"] == ["light.shared"]
+        assert warning.call_count == 2
+    assert al.options == original and al_second.options == original_second
+
+
+async def test_setup_cleanup_and_overlap(hass):
+    callbacks = []
+    entry = SimpleNamespace(entry_id="lifecycle", title="Lifecycle", options={
+        **DEFAULTS, "points": [{"time": "06:00", **WHITE}], "lights": ["light.rgb", "light.ct"],
+    }, async_on_unload=callbacks.append, add_update_listener=lambda _: lambda: None)
+    al = SimpleNamespace(options={"lights": ["light.rgb", "light.ct"]})
+    original = deepcopy(al.options)
+    hass.config_entries.async_entries = lambda _: [al, al]
+    hass.config_entries.async_forward_entry_setups = AsyncMock()
+    with patch.object(Curve, "async_update", side_effect=HomeAssistantError("start failed")), \
+         patch("custom_components.lighting_curves._LOGGER.warning") as warning:
+        try:
+            await async_setup_entry(hass, entry)
+        except HomeAssistantError:
+            pass
+        else:
+            raise AssertionError("start should fail")
+        assert callbacks == [entry.runtime_data.async_stop]
+        assert warning.call_count == 1
+        assert "light.ct, light.rgb" in warning.call_args.args
+    callbacks.pop()()  # HA runs registered cleanup after failed setup.
+    assert not entry.runtime_data._listeners and entry.runtime_data._interval is None
+    assert entry.entry_id not in hass.data["lighting_curves"]["curves"]
+    await async_setup_entry(hass, entry)
+    curve = entry.runtime_data
+    curve.preview = {"light.rgb": True}
+    curve.async_restart_preview_timeout()
+    hass.states.async_set("light.rgb", "unavailable", RGB)
+    await hass.async_block_till_done()
+    interval, retry = curve._interval, curve._preview_timeout
+
+    async def unload_platforms(*_):
+        while callbacks:
+            callbacks.pop()()  # Model HA config-entry unload callbacks.
+        return True
+
+    with patch.object(hass.config_entries, "async_unload_platforms", side_effect=unload_platforms) as unload, \
+         patch.object(curve, "async_end_preview", wraps=curve.async_end_preview) as rollback:
+        assert await async_unload_entry(hass, entry)
+        rollback.assert_awaited_once()
+        unload.assert_awaited_once()
+    assert interval and retry and curve._interval is None and curve._preview_timeout is None
+    assert not curve._listeners and not curve._manual_timeouts
+    assert entry.entry_id not in hass.data["lighting_curves"]["curves"]
+    assert not hass.data["lighting_curves"]["hooks"]
+    assert al.options == original
+
+
 async def main():
     hass = HomeAssistant("/tmp/lighting-curves-test")
     hass.config_entries = SimpleNamespace(async_unload_platforms=AsyncMock(return_value=True))
     calls = []
+    service_calls = []
     fail = set()
 
     def schema(data):
-        return {"entity_id": data["entity_id"], "params": {k: v for k, v in data.items() if k != "entity_id"}}
+        targets = {"entity_id", "area_id", "device_id"}
+        return {**{k: v for k, v in data.items() if k in targets},
+                "params": {k: v for k, v in data.items() if k not in targets}}
 
     async def handler(call):
         entities = call.data["entity_id"]
         if isinstance(entities, str):
             entities = [entities]
+        service_calls.append((list(entities), call.service, dict(call.data["params"]), call.context))
         for entity_id in entities:
             params = call.data["params"]
             calls.append((entity_id, call.service, dict(params)))
             if entity_id in fail:
                 raise HomeAssistantError("test failure")
             old = hass.states.get(entity_id)
+            if members := old.attributes.get("entity_id"):
+                await hass.services.async_call("light", call.service, {"entity_id": members, **params},
+                                               blocking=True, context=call.context)
             new = "off" if call.service == "turn_off" or (call.service == "toggle" and old.state == "on") else "on"
             hass.states.async_set(entity_id, new, {**old.attributes, **params}, context=call.context)
 
@@ -71,6 +242,15 @@ async def main():
     calls.clear()
     await curve.async_update(force=True)
     assert not calls, "matching steady target must not send again"
+
+    await test_remaining_group_context(hass, calls, service_calls)
+    await test_area_targets_batched(hass, service_calls)
+    await test_effect_flash_pass_through(hass, service_calls)
+    await test_caller_transition(hass, service_calls)
+    await test_busy_tick_skipped(curve)
+    hass.states.async_set("light.rgb", "off", RGB)
+    await hass.async_block_till_done()
+    calls.clear()
 
     # Mixed target routing preserves unrelated lights and rewrites off LC lights before turn-on.
     await hass.services.async_call("light", "turn_on", {"entity_id": ["light.rgb", "light.other"], "brightness": 12}, blocking=True)
@@ -198,7 +378,11 @@ async def main():
     assert len(form["data_schema"].schema) == 5
     result = await flow.async_step_init({**DEFAULTS, "transition": 20})
     assert result["data"]["transition"] == 20 and result["data"]["lights"] == ["light.ct"]
-    print("ok: capabilities, startup, steady-state skip, mixed interception, manual control, preview rollback/unload, fallback")
+    await test_migration_duplicate_ownership()
+    await test_setup_cleanup_and_overlap(hass)
+    print("ok: capabilities, contexts, batched targets, effect/flash, transitions, tolerances, busy ticks, migration ownership, setup cleanup, manual control, preview rollback/unload, fallback")
 
 
+test_context_ownership()
+test_round_trip_tolerances()
 asyncio.run(main())

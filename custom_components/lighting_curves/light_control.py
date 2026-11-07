@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.light import LightEntityFeature
 from homeassistant.core import Context
 from homeassistant.util import color
 
@@ -38,7 +37,7 @@ def own_context(parent=None):
 
 
 def is_ours(context):
-    return any(value and value[10:18] == "1C1C1C1C" for value in (context.id, context.parent_id))
+    return context.id[10:18] == "1C1C1C1C"
 
 
 def light_data(state, setting, paused=()):
@@ -77,17 +76,18 @@ def matches(state, data):
         if actual is None:
             return False
         if isinstance(value, (list, tuple)):
-            if len(actual) != len(value) or any(abs(a - b) > 1 for a, b in zip(actual, value)):
+            if len(actual) != len(value) or any(abs(a - b) > 3 for a, b in zip(actual, value)):
+                return False
+        elif key == "color_temp_kelvin":
+            if abs(1_000_000 / actual - 1_000_000 / value) > 1:
                 return False
         elif abs(actual - value) > 1:
             return False
     return True
 
 
-def with_transition(state, data, seconds):
-    if state.attributes.get("supported_features", 0) & LightEntityFeature.TRANSITION:
-        return {**data, "transition": seconds}
-    return dict(data)
+def with_transition(data, seconds):
+    return {**data, "transition": seconds}
 
 
 def register_curve(curve):
@@ -102,9 +102,11 @@ def register_curve(curve):
         if is_ours(call.context):
             return
         original = dict(data.get("params", {}))
+        if "effect" in original or "flash" in original:
+            return
         if original.get("brightness") == 0 or original.get("white") == 0:
             return  # HA treats brightness zero as turn_off.
-        entities = sorted(target_entities(hass, data))
+        entities = sorted(entity for entity in target_entities(hass, data) if entity.startswith("light."))
         rewrites = {}
         for entity_id in entities:
             state = hass.states.get(entity_id)
@@ -114,7 +116,7 @@ def register_curve(curve):
             owner.resume(entity_id)
             owner.calculate_target()
             rewrites[entity_id] = with_transition(
-                state, light_data(state, owner.target), owner.option("initial_transition")
+                light_data(state, owner.target), original.get("transition", owner.option("initial_transition"))
             )
             owner.intercepted[entity_id] = call.context.id
         if not rewrites:
@@ -122,11 +124,9 @@ def register_curve(curve):
         # Like AL, keep one target in the original call and route the rest
         # separately. Each light gets its own capability-filtered curve target.
         first = next(iter(rewrites))
-        for entity_id in entities:
-            params = dict(original)
-            if entity_id in rewrites:
-                params = {k: v for k, v in params.items() if k not in CONTROL_KEYS}
-                params.update(rewrites[entity_id])
+        for entity_id, rewrite in rewrites.items():
+            params = {k: v for k, v in original.items() if k not in CONTROL_KEYS}
+            params.update(rewrite)
             if entity_id == first:
                 data.clear()
                 data.update(entity_id=[entity_id], params=params)
@@ -139,6 +139,15 @@ def register_curve(curve):
                 except Exception:
                     # Do not replay a mixed toggle after some targets already succeeded.
                     _LOGGER.exception("Could not forward %s for %s", call.service, entity_id)
+        remaining = [entity_id for entity_id in entities if entity_id not in rewrites]
+        if remaining:
+            try:
+                await hass.services.async_call(
+                    "light", call.service, {"entity_id": remaining, **original},
+                    blocking=True, context=Context(parent_id=call.context.id),
+                )
+            except Exception:
+                _LOGGER.exception("Could not forward %s for %s", call.service, remaining)
 
     try:
         for service in ("turn_on", "toggle"):

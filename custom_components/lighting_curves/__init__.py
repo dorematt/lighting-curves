@@ -124,8 +124,10 @@ class Curve:
             self._listeners.pop()()
         if self._interval:
             self._interval()
+            self._interval = None
         if self._preview_timeout:
             self._preview_timeout()
+            self._preview_timeout = None
         for cancel, _deadline in self._manual_timeouts.values():
             cancel()
         self._manual_timeouts.clear()
@@ -235,7 +237,7 @@ class Curve:
                 try:
                     await self.hass.services.async_call(
                         "light", "turn_on", {"entity_id": entity_id, **with_transition(
-                            state, data, self.option("transition") if transition is None else transition
+                            data, self.option("transition") if transition is None else transition
                         )}, blocking=True, context=own_context(),
                     )
                 except Exception:
@@ -299,7 +301,8 @@ class Curve:
         await self.async_update()
 
     async def _async_tick(self, _now):
-        await self.async_update(force=True)
+        if not self._apply_lock.locked():
+            await self.async_update(force=True)
 
     async def async_update(self, force=False):
         self.calculate_target()
@@ -323,6 +326,13 @@ async def async_migrate_entry(hass, entry):
                 options["lights"] = []
                 if switch:
                     _LOGGER.warning("Schedule %s: linked Adaptive Lighting entry not found; choose its lights again", entry.title)
+        owned = {light for other in hass.config_entries.async_entries(DOMAIN) if other.entry_id != entry.entry_id
+                 for light in other.options.get("lights", [])}
+        duplicates = sorted(owned.intersection(options["lights"]))
+        if duplicates:
+            _LOGGER.warning("Schedule %s: dropped lights already owned by another Lighting Curves schedule: %s",
+                            entry.title, ", ".join(duplicates))
+            options["lights"] = [light for light in options["lights"] if light not in owned]
         data = {k: v for k, v in entry.data.items() if k != "switch"}
         hass.config_entries.async_update_entry(entry, data=data, options=options, version=2)
         _LOGGER.info("Migrated schedule %s to standalone light control (%d lights)", entry.title, len(options["lights"]))
@@ -339,9 +349,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.runtime_data = curve = Curve(hass, entry)
+    al_lights = {light for al in hass.config_entries.async_entries("adaptive_lighting")
+                 for light in al.options.get("lights", [])}
+    overlap = sorted(al_lights.intersection(curve.lights()))
+    if overlap:
+        _LOGGER.warning("Schedule %s: %s are still in Adaptive Lighting; remove them from Adaptive Lighting so the two do not fight",
+                        entry.title, ", ".join(overlap))
     await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR])
-    await curve.async_start()
     entry.async_on_unload(curve.async_stop)
+    await curve.async_start()
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
@@ -356,5 +372,8 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    await entry.runtime_data.async_end_preview()
+    try:
+        await entry.runtime_data.async_end_preview()
+    except HomeAssistantError:
+        _LOGGER.exception("Could not restore preview for schedule %s during unload; continuing teardown", entry.title)
     return await hass.config_entries.async_unload_platforms(entry, [Platform.SENSOR])

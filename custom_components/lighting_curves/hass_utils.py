@@ -5,7 +5,7 @@ setup_service_call_interceptor and target_entities only; safe chained removal.
 """
 from __future__ import annotations
 
-import asyncio
+import inspect
 import logging
 
 from homeassistant.helpers.target import TargetSelection, async_extract_referenced_entity_ids
@@ -36,7 +36,7 @@ def setup_service_call_interceptor(hass, domain, service, intercept):
                 call.data = ReadOnlyDict(data)
             except Exception:  # Keep the original light service usable.
                 _LOGGER.exception("Could not intercept %s.%s", domain, service)
-        if asyncio.iscoroutinefunction(handler):
+        if inspect.iscoroutinefunction(handler):
             return await handler(call)
         return handler(call)
 
