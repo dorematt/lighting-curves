@@ -48,6 +48,7 @@ def schedules(hass, entry_id=None):
         "entry_id": entry.entry_id,
         "title": entry.title,
         "lights": entry.runtime_data.lights(),
+        "curve_active": {light: light not in entry.runtime_data.manual for light in entry.runtime_data.lights()},
         "target": entry.runtime_data.target,
         "options": {key: entry.runtime_data.option(key) for key in DEFAULTS},
         "preview": entry.runtime_data.preview_state(),

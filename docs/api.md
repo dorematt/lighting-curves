@@ -53,7 +53,7 @@ Each schedule has this shape (graph arrays shortened):
   "entry_id": "…", "title": "Desk",
   "points": [{"time":"06:00","brightness":80,"color_temp_kelvin":4000}],
   "times": [360], "sunrise": 360, "sunset": 1080, "now": 720,
-  "lights": ["light.desk"],
+  "lights": ["light.desk"], "curve_active": {"light.desk": true},
   "target": {"brightness":80,"color_temp_kelvin":4000},
   "options": {"interval":90,"transition":45,"initial_transition":1,"manual_control_mode":"pause_all","manual_control_timeout":0},
   "preview": {"active":false,"expires_at":null},
@@ -115,6 +115,14 @@ Set these through the integration's native options flow; actions/WS preserve the
 | `initial_transition` | 1 s | Fade on turn-on / restoration; minimum 0; caller's explicit transition wins on intercepted turn-on |
 | `manual_control_mode` | `pause_all` | Manual change pauses brightness and colour; `pause_changed` pauses only changed axes |
 | `manual_control_timeout` | 0 s | Resume after this delay; 0 disables the timer; off/on also resumes |
+
+Each assigned light has a **Light name Curve Active** switch on its schedule device. It is off
+whenever any axis is manually paused, including in `pause_changed` mode. Use `switch.turn_on` to clear
+that light's pauses and timeout and apply the current target with `transition` if the light is on;
+it never turns an off light on. Use `switch.turn_off` to hold both axes without a timeout, including
+after restart. A light's off→on cycle still resumes the curve. These standard switch actions replace
+an Adaptive Lighting manual-control reset in automations. `curve_active` in schedules/get_schedules
+and diagnostics maps each light ID to this boolean state.
 
 Saving points/assignments reconciles currently-on lights; it does not turn previously-off lights on. An effect or flash turn-on of an off light passes through and pauses both axes until the light next turns off and on (or the manual-control timeout ends). On a light that is already on, an effect counts as a colour change for manual control; a flash does not pause anything. An unavailable interceptor falls back to adaptation after turn-on, which can produce a flash. Another controller (including Adaptive Lighting) on the same lights can conflict; remove those assignments yourself.
 

@@ -46,6 +46,13 @@
       }
     }
   },
+  "entity": {
+    "switch": {
+      "curve_active": {
+        "name": "{light} Curve Active"
+      }
+    }
+  },
   "services": {
     "create_schedule": {
       "name": "Create schedule",
