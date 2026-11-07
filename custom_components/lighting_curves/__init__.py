@@ -181,7 +181,8 @@ class Curve:
         old, new = event.data["old_state"], event.data["new_state"]
         if not new or new.state != STATE_ON or (old and old.state == STATE_ON):
             return
-        self.resume(new.entity_id)
+        if old and old.state == "off":
+            self.resume(new.entity_id)
         intercepted = self.intercepted.pop(new.entity_id, None)
         if self.in_preview(new.entity_id) or is_ours(event.context) or (
             intercepted and intercepted in (event.context.id, event.context.parent_id)

@@ -82,6 +82,12 @@ async def main():
     await hass.services.async_call("light", "turn_on", {"entity_id": "light.ct", "brightness": 10}, blocking=True)
     await hass.async_block_till_done()
     assert curve.manual["light.ct"] == {"brightness", "color"}
+    # A reconnect is not an off->on cycle and must retain the user's override.
+    await curve._async_light_changed(Event("state_changed", {
+        "old_state": State("light.ct", "unavailable", CT),
+        "new_state": hass.states.get("light.ct"),
+    }))
+    assert curve.manual["light.ct"] == {"brightness", "color"}
     calls.clear()
     await curve.async_update(force=True)
     assert not calls
