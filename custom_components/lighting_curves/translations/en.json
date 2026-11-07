@@ -3,15 +3,117 @@
     "step": {
       "user": {
         "title": "Add a lighting curve",
-        "description": "Name the schedule (for example the room). Pick an Adaptive Lighting switch to have the schedule drive its lights. Leave it empty for a schedule that only provides a sensor, for use in your own automations.",
-        "data": { "name": "Name", "switch": "Adaptive Lighting switch" }
+        "description": "Name the schedule, then choose lights in its options. Add the Lighting Curves card to a dashboard to edit the curve.",
+        "data": {
+          "name": "Name"
+        }
       }
     },
     "error": {
-      "not_main_switch": "Pick the main Adaptive Lighting switch, not its sleep mode or adapt switches."
+      "empty_name": "Give the schedule a name."
     },
     "abort": {
-      "already_configured": "A schedule with this name or switch already exists."
+      "already_configured": "A schedule with this name already exists. Add the Lighting Curves card to a dashboard to edit its curve."
+    },
+    "create_entry": {
+      "created": "Schedule created. Choose lights in its options, then add the Lighting Curves card to a dashboard to edit the curve."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Light control",
+        "description": "Adding lights moves them from other Lighting Curves schedules. Lights follow the curve while on. Manual changes pause adaptation until off/on or the timeout (0 disables it). Add the Lighting Curves card to a dashboard to edit the curve.",
+        "data": {
+          "interval": "Update interval",
+          "transition": "Transition",
+          "initial_transition": "Turn-on transition",
+          "manual_control_mode": "Manual control",
+          "manual_control_timeout": "Manual control timeout",
+          "lights": "Lights"
+        }
+      }
+    },
+    "error": {
+      "invalid_lights": "Choose existing light entities."
+    }
+  },
+  "selector": {
+    "manual_control_mode": {
+      "options": {
+        "pause_all": "Pause brightness and colour",
+        "pause_changed": "Pause only changed attributes"
+      }
+    }
+  },
+  "services": {
+    "create_schedule": {
+      "name": "Create schedule",
+      "description": "Create a schedule with a default curve and no lights. Requires an administrator. Returns entry_id when a response is requested.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "A nonempty schedule name, unique ignoring case and surrounding spaces."
+        }
+      }
+    },
+    "set_points": {
+      "name": "Set points",
+      "description": "Replace the entire curve. Requires an administrator. Preserves lights and control options.",
+      "fields": {
+        "entry_id": {
+          "name": "Schedule",
+          "description": "A loaded Lighting Curves schedule."
+        },
+        "points": {
+          "name": "Points",
+          "description": "Nonempty array of time, brightness (1–100) and either color_temp_kelvin (1000–10000) or rgb_color ([0–255, 0–255, 0–255]). See docs/api.md."
+        }
+      }
+    },
+    "set_lights": {
+      "name": "Set lights",
+      "description": "Replace all assigned lights, moving them from other Lighting Curves schedules. Requires an administrator. An empty list removes all lights.",
+      "fields": {
+        "entry_id": {
+          "name": "Schedule",
+          "description": "A loaded Lighting Curves schedule."
+        },
+        "lights": {
+          "name": "Lights",
+          "description": "Existing light entities. Unavailable lights may be assigned."
+        }
+      }
+    },
+    "get_schedules": {
+      "name": "Get schedules",
+      "description": "Return loaded schedules, points, resolved times, lights, target, options and preview state. A response is required.",
+      "fields": {
+        "entry_id": {
+          "name": "Schedule",
+          "description": "Optional loaded schedule; omit to return all loaded schedules."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "empty_name": {
+      "message": "Give the schedule a name."
+    },
+    "exists": {
+      "message": "A schedule called {name} already exists."
+    },
+    "not_found": {
+      "message": "No loaded Lighting Curves schedule with that entry_id."
+    },
+    "invalid_points": {
+      "message": "Invalid curve points: {error}"
+    },
+    "invalid_lights": {
+      "message": "Choose existing light entities."
+    },
+    "invalid_input": {
+      "message": "Invalid action input: {error}"
     }
   }
 }

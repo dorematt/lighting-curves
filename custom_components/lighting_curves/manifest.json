@@ -1,9 +1,6 @@
 {
   "domain": "lighting_curves",
   "name": "Lighting Curves",
-  "after_dependencies": [
-    "adaptive_lighting"
-  ],
   "codeowners": [
     "@dorematt"
   ],
@@ -11,11 +8,13 @@
   "dependencies": [
     "frontend",
     "http",
+    "light",
     "websocket_api"
   ],
   "documentation": "https://github.com/dorematt/lighting-curves",
   "integration_type": "service",
   "iot_class": "calculated",
+  "issue_tracker": "https://github.com/dorematt/lighting-curves/issues",
   "requirements": [],
-  "version": "0.2.1"
+  "version": "1.0.0"
 }

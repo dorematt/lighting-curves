@@ -3,7 +3,6 @@
 // Served and registered by the integration; no build step.
 
 const WS = "lighting_curves";
-const AL_LINK = "https://my.home-assistant.io/redirect/hacs_repository/?owner=basnijholt&repository=adaptive-lighting&category=integration";
 const ANCHORS = [
   ["clock", "Clock time"],
   ["sunrise", "Sunrise"],
@@ -48,7 +47,7 @@ function toForm(p) {
 function fromForm(d) {
   const off = Math.round(Number(d.offset) || 0);
   const p = {
-    time: d.anchor === "clock" ? d.time.slice(0, 5) : `${d.anchor}${off < 0 ? "-" : "+"}${Math.abs(off)}`,
+    time: d.anchor === "clock" ? (d.time ? d.time.slice(0, 5) : "") : `${d.anchor}${off < 0 ? "-" : "+"}${Math.abs(off)}`,
     brightness: Math.round(d.brightness),
   };
   if (d.colour === "rgb") p.rgb_color = d.rgb_color.map(Math.round);
@@ -81,7 +80,6 @@ const LABELS = {
   rgb_color: "Colour",
   preview: "Preview on the lights",
   lights: "",
-  adaptive: "Use Adaptive Lighting",
   name: "Name (for example the room)",
 };
 
@@ -179,7 +177,7 @@ class LightingCurvesCard extends HTMLElement {
   }
 
   connectedCallback() {
-    this._timer = setInterval(() => !this._edit && this._load(), 60000);
+    this._timer = setInterval(() => this._edit ? this._refreshPreview() : this._load(), 60000);
   }
 
   disconnectedCallback() {
@@ -192,6 +190,7 @@ class LightingCurvesCard extends HTMLElement {
     this._loading = true;
     try {
       this._schedules = await this._hass.callWS({ type: `${WS}/schedules` });
+      this._loadedAt = Date.now();
       this._error = null;
     } catch (e) {
       this._error = e.message || String(e);
@@ -279,7 +278,7 @@ class LightingCurvesCard extends HTMLElement {
         <ha-icon icon="mdi:lightbulb-group"></ha-icon>
         <span class="when"><span>Lights</span><span class="sub">${
           names.length
-            ? `${esc(names.join(", "))} · ${s.adaptive ? "Adaptive Lighting" : "Set when turned on"}`
+            ? esc(names.join(", "))
             : "None: the schedule is only a sensor"
         }</span></span>
         <ha-icon class="chev" icon="mdi:chevron-right"></ha-icon>
@@ -322,18 +321,13 @@ class LightingCurvesCard extends HTMLElement {
     const canDelete = e.kind === "point" && e.index !== null && this._schedule.points.length > 1;
     const title = { lights: "Lights", new: "New schedule", point: e.index === null ? "New point" : "Edit point" }[e.kind];
     const help = {
-      lights: `${
-        this._schedule.al_available
-          ? ""
-          : `<p class="warn">Requires the Adaptive Lighting integration to be installed. <a href="${AL_LINK}" target="_blank" rel="noreferrer">Get Adaptive Lighting</a></p>`
-      }<p><b>On</b> – Will use the Adaptive Lighting integration to keep the light following the curve over time.<br>
-        <b>Off</b> – Light will only update its brightness and colour when triggered.</p>
-        <p>A light follows one schedule: one you add here leaves its other schedule. With no lights the schedule is only a sensor.</p>`,
+      lights: "<p>Lights follow the curve while on. Changing brightness or colour pauses adaptation until the light turns off and on again (or the configured timeout).</p><p>A light follows one schedule: adding it here moves it from its other schedule. With no lights the schedule is only a sensor.</p>",
       new: "The schedule starts with a default day curve and no lights.",
     }[e.kind];
     return `<div class="editor">
       <div class="etitle">${title}</div>
       <div id="form"></div>
+      ${e.kind === "point" ? `<div class="help" id="preview-status">${this._previewStatus()}</div>` : ""}
       ${help ? `<div class="help">${help}</div>` : ""}
       <div class="buttons">
         ${canDelete ? `<button class="btn del" data-delete>Delete</button>` : ""}
@@ -348,8 +342,9 @@ class LightingCurvesCard extends HTMLElement {
     const s = this._schedule;
     let p;
     if (index === null) {
-      const n = new Date();
-      const m = Math.round((n.getHours() * 60 + n.getMinutes()) / 5) * 5;
+      // The server's local minute from the schedules response, not this browser's clock,
+      // plus the time since that response (polling stops while an editor is open).
+      const m = Math.round((s.now + (Date.now() - this._loadedAt) / 60000) / 5) * 5;
       p = { time: hhmm(m % 1440), brightness: s.target?.brightness ?? 50 };
       if (s.target?.rgb_color) p.rgb_color = s.target.rgb_color;
       else p.color_temp_kelvin = s.target?.color_temp_kelvin ?? 2700;
@@ -359,10 +354,7 @@ class LightingCurvesCard extends HTMLElement {
   }
 
   _openOther(kind) {
-    this._edit = { kind, data: kind === "lights" ? {
-              lights: [...this._schedule.lights],
-              adaptive: this._schedule.adaptive || (!this._schedule.lights.length && this._schedule.al_available),
-            } : { name: "" } };
+    this._edit = { kind, data: kind === "lights" ? { lights: [...this._schedule.lights] } : { name: "" } };
     this._render();
   }
 
@@ -371,7 +363,6 @@ class LightingCurvesCard extends HTMLElement {
     if (e.kind === "lights")
       return [
         { name: "lights", selector: { entity: { domain: "light", multiple: true } } },
-        { name: "adaptive", selector: { boolean: {} }, disabled: !this._schedule.al_available },
       ];
     if (e.kind === "new") return [{ name: "name", required: true, selector: { text: {} } }];
     return formSchema(e.data, this._canPreview());
@@ -381,9 +372,12 @@ class LightingCurvesCard extends HTMLElement {
     const e = this._edit;
     try {
       if (e.kind === "lights") {
-        await this._hass.callWS({ type: `${WS}/set_lights`, entry_id: this._current, lights: e.data.lights || [], adaptive: !!e.data.adaptive });
+        await this._hass.callWS({ type: `${WS}/set_lights`, entry_id: this._current, lights: e.data.lights || [] });
       } else {
-        if (!e.data.name?.trim()) return;
+        if (!e.data.name?.trim()) {
+          this._toast("A schedule needs a name");
+          return;
+        }
         this._current = (await this._hass.callWS({ type: `${WS}/create`, name: e.data.name.trim() })).entry_id;
       }
     } catch (err) {
@@ -396,8 +390,9 @@ class LightingCurvesCard extends HTMLElement {
   }
 
   _draftPoints() {
-    const pts = [...this._schedule.points];
     const p = fromForm(this._edit.data);
+    if (!p.time) throw new Error("The point needs a time");
+    const pts = [...this._schedule.points];
     if (this._edit.index === null) pts.push(p);
     else pts[this._edit.index] = p;
     return pts;
@@ -426,7 +421,13 @@ class LightingCurvesCard extends HTMLElement {
       this._previewing = true;
       const setting = { ...p };
       delete setting.time;
-      this._call("preview", { setting });
+      this._previewPending = true;
+      try {
+        await this._call("preview", { setting });
+      } finally {
+        this._previewPending = false;
+      }
+      await this._refreshPreview();
     } else if (old.preview) this._endPreview();
     try {
       this._sample = await this._hass.callWS({ type: `${WS}/sample`, points: this._draftPoints() });
@@ -437,6 +438,41 @@ class LightingCurvesCard extends HTMLElement {
     }
   }
 
+  _previewStatus() {
+    const p = this._schedule?.preview;
+    if (!p?.active || !p.expires_at) return "";
+    // The user's profile picks the server's or the browser's time zone, as elsewhere in HA.
+    const zone = this._hass?.locale?.time_zone === "local" ? undefined : this._hass?.config?.time_zone;
+    const at = new Date(p.expires_at);
+    let time;
+    try {
+      time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: zone });
+    } catch (_) {
+      time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); // unknown zone name
+    }
+    return `Preview ends at ${time}`;
+  }
+
+  async _refreshPreview() {
+    try {
+      // Copy only the preview state: an open editor's index refers to the points it opened with.
+      const fresh = await this._hass.callWS({ type: `${WS}/schedules` });
+      const s = this._schedule;
+      const match = s && fresh.find((f) => f.entry_id === s.entry_id);
+      if (match) Object.assign(s, { preview: match.preview, now: match.now });
+      this._loadedAt = Date.now();
+      if (!this._previewPending && !s?.preview?.active) {
+        this._previewing = false;
+        if (this._edit?.kind === "point") {
+          this._edit.data.preview = false;
+          if (this._form) this._form.data = { ...this._edit.data };
+        }
+      }
+      const status = this.shadowRoot.querySelector("#preview-status");
+      if (status) status.textContent = this._previewStatus();
+    } catch (_) { /* Keep the last confirmed state until the next refresh. */ }
+  }
+
   _canPreview() {
     return (this._schedule?.lights || []).length > 0;
   }
@@ -444,7 +480,7 @@ class LightingCurvesCard extends HTMLElement {
   _endPreview() {
     if (!this._previewing) return;
     this._previewing = false;
-    this._call("preview_end", {});
+    this._call("preview_end", {}).then(() => this._refreshPreview());
   }
 
   _call(cmd, extra) {
@@ -505,9 +541,17 @@ class LightingCurvesCard extends HTMLElement {
     );
     root.querySelector("[data-new]")?.addEventListener("click", () => this._openOther("new"));
     root.querySelector("[data-cancel]")?.addEventListener("click", () => this._close());
-    root.querySelector("[data-save]")?.addEventListener("click", () =>
-      this._edit.kind === "point" ? this._save(this._draftPoints()) : this._saveOther()
-    );
+    root.querySelector("[data-save]")?.addEventListener("click", () => {
+      if (this._edit.kind !== "point") return this._saveOther();
+      let pts;
+      try {
+        pts = this._draftPoints();
+      } catch (e) {
+        this._toast(e.message || String(e));
+        return;
+      }
+      this._save(pts);
+    });
     root.querySelectorAll("[data-delete]").forEach((b) =>
       b.addEventListener("click", () => this._save(this._schedule.points.filter((_, i) => i !== this._edit.index)))
     );
