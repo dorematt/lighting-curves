@@ -71,13 +71,14 @@ async def test_area_targets_batched(hass, service_calls):
     service_calls.clear()
     from custom_components.lighting_curves.hass_utils import target_entities
 
-    def area_targets(hass, data):
+    def area_targets(hass, data, expand_group=False):
         if data.get("area_id") == "room":
             return {"sensor.room", "light.rgb", "light.other", "light.other_two"}
-        return target_entities(hass, data)
+        return target_entities(hass, data, expand_group)
 
     with patch("custom_components.lighting_curves.light_control.target_entities", side_effect=area_targets), \
-         patch("custom_components.lighting_curves.target_entities", side_effect=area_targets):
+         patch("custom_components.lighting_curves.target_entities", side_effect=area_targets), \
+         patch("custom_components.lighting_curves.hass_utils.target_entities", side_effect=area_targets):
         await hass.services.async_call("light", "turn_on", {"area_id": "room", "brightness": 12}, blocking=True)
         await hass.async_block_till_done()
     assert len(service_calls) == 2
@@ -170,6 +171,15 @@ async def test_separate_turn_on(hass, calls, service_calls, curve, fail):
             await hass.services.async_call("light", "turn_off", target, blocking=True, context=Context(user_id="abc"))
             await hass.async_block_till_done()
             assert [c[0][0] for c in service_calls if c[1] == "turn_on"] == dimmed, service_calls
+        # A rejected mixed toggle (allowed light on, denied light off) is left whole for HA to reject.
+        hass.states.async_set("light.ct", "off", CT)
+        await hass.async_block_till_done()
+        service_calls.clear()
+        await hass.services.async_call("light", "toggle", {"entity_id": ["light.ct", "light.rgb"]}, blocking=True,
+                                       context=Context(user_id="abc"))
+        # (The fake handler does not enforce permissions, so the curve then applies to the light it turned on.)
+        assert service_calls[0][:3] == (["light.ct", "light.rgb"], "toggle", {}), service_calls
+        assert not any(c[2] == {"brightness": 13} for c in service_calls), service_calls
         user.is_admin = True
         from homeassistant.helpers import target as target_helpers
         if hasattr(target_helpers, "async_extract_excluded_entity_ids"):  # exclude blocks: HA 2026.11+

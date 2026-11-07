@@ -2,7 +2,7 @@
 
 Apache-2.0, copyright its authors/contributors. Modified for Lighting Curves:
 setup_service_call_interceptor and target_entities only; safe chained removal.
-off_targets and the interceptor's after-callback are Lighting Curves code.
+acted_on and the interceptor's after-callback are Lighting Curves code.
 """
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ def target_entities(hass, data, expand_group=False):
     return selected.referenced | selected.indirectly_referenced
 
 
-async def off_targets(hass, call, data):
-    """The lights HA will act on for this call; empty if HA will reject it.
+async def acted_on(hass, call, data):
+    """The lights HA will act on for this call, or None if HA will reject it.
 
     Mirrors entity_service_call: "all" drops excluded lights and, for a non-admin, lights they
     may not control; any other target is rejected whole if one referenced entity is denied.
@@ -38,11 +38,11 @@ async def off_targets(hass, call, data):
     if call.context.user_id:
         user = await hass.auth.async_get_user(call.context.user_id)
         if user is None:
-            return []
+            return None
         if not user.is_admin:
             allowed = [e for e in entities if user.permissions.check_entity(e, POLICY_CONTROL)]
             if whole and len(allowed) != len(entities):
-                return []
+                return None
             entities = allowed
     return sorted(e for e in entities if e.startswith("light."))
 

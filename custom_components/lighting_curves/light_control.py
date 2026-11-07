@@ -12,7 +12,7 @@ import logging
 from homeassistant.core import Context
 from homeassistant.util import color
 
-from .hass_utils import off_targets, setup_service_call_interceptor, target_entities
+from .hass_utils import acted_on, setup_service_call_interceptor, target_entities
 
 # The curve leaves a floored light alone until its turn-off finishes, then for this long while
 # the device reports off. CLOSING_LIMIT caps it if the hook never hears back.
@@ -113,14 +113,14 @@ def register_curve(curve):
     def owner_of(entity_id):
         return next((c for c in shared["curves"].values() if entity_id in c.lights()), None)
 
-    async def floor_before_off(call, data):
+    async def floor_before_off(call, targets):
         """Separate turn-on: dim curve-active lights to the floor so the next plain turn-on starts there.
 
         Returns a callback for when the turn-off finishes. Light groups forward the turn-off to
         their members, and those calls pass through here again.
         """
         floored = []
-        for entity_id in await off_targets(hass, call, data):
+        for entity_id in targets:
             owner, state = owner_of(entity_id), hass.states.get(entity_id)
             level = owner and round(owner.option("turn_on_floor") * 255 / 100)
             if (not owner or not owner.option("separate_turn_on") or not state or state.state != "on"
@@ -151,7 +151,10 @@ def register_curve(curve):
     async def intercept(call, data):
         if is_ours(call.context):
             return None
-        finished = await floor_before_off(call, data) if call.service != "turn_on" else None
+        targets = await acted_on(hass, call, data)
+        if targets is None:
+            return None  # HA rejects the whole call: dim nothing and do not split it.
+        finished = await floor_before_off(call, targets) if call.service != "turn_on" else None
         if call.service != "turn_off":
             await rewrite_turn_on(call, data)
         return finished
