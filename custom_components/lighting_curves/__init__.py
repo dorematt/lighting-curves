@@ -43,6 +43,7 @@ from .light_control import (
 )
 
 DOMAIN = "lighting_curves"
+PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
 PREVIEW_TIMEOUT = 600
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,6 +73,8 @@ class Curve:
         self.intercepted = {}
         self.passthrough = {}  # entity_id -> context of an effect/flash turn-on
         self.manual = {}
+        self._held = set()
+        self.async_sync_switches = None
         self._manual_timeouts = {}
         self._listeners = []
         self._interval = self._preview_timeout = None
@@ -139,14 +142,31 @@ class Curve:
 
     @callback
     def resume(self, entity_id):
-        self.manual.pop(entity_id, None)
+        paused = self.manual.pop(entity_id, None)
+        self._held.discard(entity_id)
         if timer := self._manual_timeouts.pop(entity_id, None):
             timer[0]()
+        if paused:
+            self._manual_changed(entity_id)
+
+    @callback
+    def hold(self, entity_id):
+        """Pause both axes until explicitly resumed or the light cycles off/on."""
+        self._held.add(entity_id)
+        self.manual[entity_id] = {"brightness", "color"}
+        self._restart_manual_timeout(entity_id)
+        self._manual_changed(entity_id)
+
+    @callback
+    def _manual_changed(self, entity_id):
+        async_dispatcher_send(self.hass, f"{DOMAIN}_{self.entry.entry_id}_{entity_id}_active")
 
     @callback
     def _restart_manual_timeout(self, entity_id, timeout=None):
         if timer := self._manual_timeouts.pop(entity_id, None):
             timer[0]()
+        if entity_id in self._held:
+            return
         if timeout is None:
             timeout = self.option("manual_control_timeout")
             if not timeout:
@@ -188,6 +208,7 @@ class Curve:
                 {"brightness", "color"} if self.option("manual_control_mode") == "pause_all" else axes
             )
             self._restart_manual_timeout(entity_id)
+            self._manual_changed(entity_id)
 
     async def _async_light_changed(self, event):
         old, new = event.data["old_state"], event.data["new_state"]
@@ -199,6 +220,7 @@ class Curve:
         if passthrough and passthrough in (event.context.id, event.context.parent_id):
             self.manual[new.entity_id] = {"brightness", "color"}  # an effect or flash owns the light
             self._restart_manual_timeout(new.entity_id)
+            self._manual_changed(new.entity_id)
             return
         intercepted = self.intercepted.pop(new.entity_id, None)
         if self.in_preview(new.entity_id) or is_ours(event.context) or (
@@ -226,12 +248,18 @@ class Curve:
             _LOGGER.info("Followed light rename %s -> %s for schedule %s", old_id, new_id, self.entry.title)
         else:
             return
-        manual, timer = self.manual.get(old_id), self._manual_timeouts.get(old_id)
-        self.resume(old_id)
+        manual, timer = self.manual.pop(old_id, None), self._manual_timeouts.pop(old_id, None)
+        held = old_id in self._held
+        self._held.discard(old_id)
+        if timer:
+            timer[0]()
         if data["action"] == "update" and manual:
             self.manual[new_id] = manual
+            if held:
+                self._held.add(new_id)
             if timer:
                 self._restart_manual_timeout(new_id, max(0, timer[1] - self.hass.loop.time()))
+            self._manual_changed(new_id)
         self.hass.config_entries.async_update_entry(self.entry, options={**self.entry.options, "lights": lights})
 
     async def _async_apply(self, lights, *, setting=None, transition=None, restore=False):
@@ -307,6 +335,7 @@ class Curve:
                     failed = True
                     _LOGGER.exception("Could not restore preview light %s", entity_id)
                 else:
+                    self.resume(entity_id)
                     self.preview.pop(entity_id, None)
             if failed:
                 self.async_restart_preview_timeout()
@@ -373,7 +402,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if overlap:
         _LOGGER.warning("Schedule %s: %s are still in Adaptive Lighting; remove them from Adaptive Lighting so the two do not fight",
                         entry.title, ", ".join(overlap))
-    await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR])
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(curve.async_stop)
     await curve.async_start()
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
@@ -385,6 +414,8 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
     for light in list(curve.manual):
         if light not in curve.lights():
             curve.resume(light)
+    if curve.async_sync_switches:
+        await curve.async_sync_switches()
     curve.reset_interval()
     await curve.async_update(force=True)
 
@@ -394,4 +425,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await entry.runtime_data.async_end_preview()
     except HomeAssistantError:
         _LOGGER.exception("Could not restore preview for schedule %s during unload; continuing teardown", entry.title)
-    return await hass.config_entries.async_unload_platforms(entry, [Platform.SENSOR])
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

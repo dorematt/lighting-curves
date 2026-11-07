@@ -25,6 +25,7 @@ evening. Lights follow the curve while they are on, and turn on at the right set
   at the curve's setting straight away.
 - **Manual changes win.** If you change a light by hand, the curve leaves it alone until it turns off and
   on again, or after a timeout you choose.
+- **Curve Active switches.** Pause or resume each light from a dashboard or automation.
 - **A dashboard card** with a day graph, the point list, a light picker and a live preview on the lights.
 - **Actions for automations and agents** to create schedules and set points and lights. See
   [docs/api.md](docs/api.md).
@@ -65,7 +66,7 @@ Select **Configure** on a schedule under **Settings → Devices & services → L
 | Transition | 45 s | The fade time for those updates. |
 | Initial transition | 1 s | The fade time when a light turns on. |
 | Manual control | Pause all | After a manual change, pause brightness and colour, or only what you changed. |
-| Manual control timeout | 0 (off) | Seconds until the curve takes back a light you changed by hand. With 0, it takes it back at the next off/on. |
+| Manual control timeout | 0 (off) | Seconds until the curve takes back a light you changed by hand. With 0, it takes it back at the next off/on. Turning Curve Active off holds without a timer, even after a restart; off/on still resumes. |
 
 ## Card options
 
@@ -83,6 +84,11 @@ Select **Configure** on a schedule under **Settings → Devices & services → L
 - One device per schedule, with `sensor.<name>_lighting_curve`. Its state is the brightness now (%), and
   the attribute `color_temp_kelvin` or `rgb_color` is the colour. A schedule with no lights still has
   this sensor, for your own automations.
+- One **Light name Curve Active** switch per assigned light, on the schedule device. Turn it on to
+  resume and apply the curve to an on light; off pauses both brightness and colour until resumed or
+  the light cycles off/on. An off light stays off. The switch stays available when the light is
+  unavailable. Returning from unavailable to on (such as after a power cut at the wall) does not
+  resume a hold; only off→on or turning Curve Active on does.
 - The actions `lighting_curves.create_schedule`, `set_points`, `set_lights` and `get_schedules`.
 - Diagnostics: download them from the schedule's menu when you report a problem.
 
